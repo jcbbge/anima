@@ -22,13 +22,13 @@ const REQUIRED_VARS = [
  */
 const DEFAULTS = {
   NODE_ENV: 'development',
-  PORT: '7000',
+  PORT: '7100',
   POSTGRES_HOST: 'localhost',
-  POSTGRES_PORT: '7001',
+  POSTGRES_PORT: '7101',
   POSTGRES_DB: 'anima',
   POSTGRES_USER: 'anima',
   EMBEDDING_PROVIDER: 'ollama',
-  OLLAMA_URL: 'http://localhost:7002',
+  OLLAMA_URL: 'http://localhost:7102',
   LOG_LEVEL: 'info',
 };
 

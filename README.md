@@ -100,16 +100,16 @@ cd anima
 bun dev
 ```
 
-The API will be available at `http://localhost:7000`
+The API will be available at `http://localhost:7100`
 
 ### Verify Installation
 
 ```bash
 # Check health endpoint
-curl http://localhost:7000/health
+curl http://localhost:7100/health
 
 # Check API info
-curl http://localhost:7000/api/v1
+curl http://localhost:7100/api/v1
 ```
 
 ### Configuration

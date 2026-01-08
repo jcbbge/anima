@@ -111,7 +111,7 @@ until curl -s http://localhost:7002/api/tags > /dev/null 2>&1; do
     echo -n "."
 done
 echo ""
-if curl -s http://localhost:7002/api/tags > /dev/null 2>&1; then
+if curl -s http://localhost:7102/api/tags > /dev/null 2>&1; then
     echo "✅ Ollama is ready"
     
     # Check if nomic-embed-text is pulled
@@ -128,13 +128,13 @@ echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "🚀 Services running:"
-echo "   • PostgreSQL: localhost:7001"
-echo "   • API: localhost:7000 (will start when you run: bun dev)"
-echo "   • Ollama: localhost:7002"
+echo "   • PostgreSQL: localhost:7101"
+echo "   • API: localhost:7100 (will start when you run: bun dev)"
+echo "   • Ollama: localhost:7102"
 echo ""
 echo "📖 Next steps:"
 echo "   1. Run 'bun dev' to start the API server"
-echo "   2. Visit http://localhost:7000/health to verify"
+echo "   2. Visit http://localhost:7100/health to verify"
 echo "   3. Check the README.md for API documentation"
 echo ""
 echo "🛑 To stop services: docker compose down"
