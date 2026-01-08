@@ -11,6 +11,7 @@
 import { query, getClient } from '../config/database.js';
 import { generateEmbedding } from './embeddingService.js';
 import { generateHash } from '../utils/hashing.js';
+import { checkAndPromote } from './tierService.js';
 
 /**
  * Custom error class for memory service errors
@@ -162,6 +163,8 @@ export async function queryMemories(queryData) {
 
   const result = await query(sql, params);
 
+  const promotions = [];
+
   // Update access tracking for returned memories
   if (result.rows.length > 0) {
     const memoryIds = result.rows.map(row => row.id);
@@ -188,6 +191,26 @@ export async function queryMemories(queryData) {
 
     await query(updateSql, updateParams);
 
+    // Check and promote memories based on access count
+    for (const memory of result.rows) {
+      const newAccessCount = memory.access_count + 1;
+      const promotionResult = await checkAndPromote(
+        memory.id,
+        newAccessCount,
+        memory.tier
+      );
+      
+      if (promotionResult.promoted) {
+        promotions.push({
+          memoryId: memory.id,
+          fromTier: memory.tier,
+          toTier: promotionResult.result.memory.tier,
+        });
+        // Update the memory object in results with new tier
+        memory.tier = promotionResult.result.memory.tier;
+      }
+    }
+
     // Record co-occurrences between memories that appeared together
     if (result.rows.length > 1 && conversationId) {
       await recordCoOccurrences(memoryIds, conversationId);
@@ -200,6 +223,7 @@ export async function queryMemories(queryData) {
     memories: result.rows,
     queryTime,
     embeddingProvider: embeddingResult.provider,
+    promotions: promotions.length > 0 ? promotions : undefined,
   };
 }
 

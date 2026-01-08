@@ -103,6 +103,7 @@ memories.post(
         {
           queryTime: result.queryTime,
           embeddingProvider: result.embeddingProvider,
+          ...(result.promotions && { promotions: result.promotions }),
         }
       );
     } catch (error) {
