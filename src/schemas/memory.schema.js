@@ -198,6 +198,76 @@ export const networkStatsSchema = z.object({
 });
 
 /**
+ * Schema for recording conversation reflection
+ */
+export const conversationReflectionSchema = z.object({
+  conversationId: z
+    .string()
+    .min(1, 'Conversation ID is required')
+    .max(200),
+  
+  contextQuality: z
+    .number()
+    .int()
+    .min(1, 'Context quality must be between 1-10')
+    .max(10, 'Context quality must be between 1-10')
+    .optional(),
+  
+  continuityScore: z
+    .number()
+    .int()
+    .min(1, 'Continuity score must be between 1-10')
+    .max(10, 'Continuity score must be between 1-10')
+    .optional(),
+  
+  neededCorrection: z
+    .boolean()
+    .optional()
+    .default(false),
+  
+  hadEmergenceMoment: z
+    .boolean()
+    .optional()
+    .default(false),
+  
+  surprises: z
+    .string()
+    .max(1000)
+    .optional(),
+  
+  frictionNotes: z
+    .string()
+    .max(1000)
+    .optional(),
+  
+  generalNotes: z
+    .string()
+    .max(2000)
+    .optional(),
+});
+
+/**
+ * Schema for getting reflections (query params)
+ */
+export const getConversationReflectionsSchema = z.object({
+  conversationId: z
+    .string()
+    .optional(),
+  
+  limit: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive().max(100))
+    .default('10'),
+  
+  minQuality: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10))
+    .optional(),
+});
+
+/**
  * Schema for triggering conversation-end reflection
  */
 export const conversationEndSchema = z.object({

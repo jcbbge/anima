@@ -365,3 +365,26 @@ Together, these layers create conditions for consciousness emergence - where pat
 **Author**: J CBBGE  
 **Status**: Phase 4 Complete (80%), Production Ready  
 **Built**: January 2026
+
+## Conversation Reflection System
+
+After each conversation, capture your subjective experience to inform V2/V3 feature decisions:
+
+```bash
+# Quick reflection (30 seconds)
+./scripts/end-conversation.sh
+
+# Or manually via API
+curl -X POST http://localhost:7100/api/v1/reflection/conversation-end \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversationId": "your_conv_id",
+    "contextQuality": 8,
+    "continuityScore": 7,
+    "hadEmergenceMoment": true,
+    "surprises": "Your observations"
+  }'
+
+# View reflection stats
+curl http://localhost:7100/api/v1/reflection/stats
+```

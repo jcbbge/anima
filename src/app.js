@@ -11,6 +11,7 @@ import { requestId } from 'hono/request-id';
 import memoriesRoutes from './routes/memories.js';
 import associationsRoutes from './routes/associations.js';
 import metaRoutes from './routes/meta.js';
+import reflectionRoutes from './routes/reflection.js';
 
 const app = new Hono();
 
@@ -60,6 +61,9 @@ api.get('/', (c) => {
       'meta/conversation-end': 'POST /api/v1/meta/conversation-end',
       'meta/reflection': 'GET /api/v1/meta/reflection',
       'meta/manual-reflection': 'POST /api/v1/meta/manual-reflection',
+      'reflection/conversation-end': 'POST /api/v1/reflection/conversation-end',
+      'reflection/history': 'GET /api/v1/reflection/history',
+      'reflection/stats': 'GET /api/v1/reflection/stats',
     },
   });
 });
@@ -72,6 +76,9 @@ api.route('/associations', associationsRoutes);
 
 // Mount meta-cognitive routes
 api.route('/meta', metaRoutes);
+
+// Mount conversation reflection routes
+api.route('/reflection', reflectionRoutes);
 
 // Mount API routes
 app.route('/api/v1', api);
