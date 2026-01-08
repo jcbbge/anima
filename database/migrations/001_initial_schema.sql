@@ -18,7 +18,7 @@ CREATE TABLE memories (
   -- Content fields
   content TEXT NOT NULL,
   content_hash TEXT NOT NULL UNIQUE,
-  embedding vector(384) NOT NULL,
+  embedding vector(768) NOT NULL,
 
   -- Tier system fields
   tier TEXT NOT NULL DEFAULT 'active'
