@@ -7,10 +7,13 @@
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
+import { requestId } from 'hono/request-id';
+import memoriesRoutes from './routes/memories.js';
 
 const app = new Hono();
 
 // Middleware
+app.use('*', requestId());
 app.use('*', logger());
 app.use('*', cors());
 
@@ -45,12 +48,15 @@ api.get('/', (c) => {
     version: 'v1',
     status: 'ready',
     endpoints: {
-      memories: '/api/v1/memories',
-      associations: '/api/v1/associations',
-      meta: '/api/v1/meta',
+      'memories/add': 'POST /api/v1/memories/add',
+      'memories/query': 'POST /api/v1/memories/query',
+      'memories/bootstrap': 'GET /api/v1/memories/bootstrap',
     },
   });
 });
+
+// Mount memory routes
+api.route('/memories', memoriesRoutes);
 
 // Mount API routes
 app.route('/api/v1', api);
