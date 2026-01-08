@@ -10,6 +10,7 @@ import { cors } from 'hono/cors';
 import { requestId } from 'hono/request-id';
 import memoriesRoutes from './routes/memories.js';
 import associationsRoutes from './routes/associations.js';
+import metaRoutes from './routes/meta.js';
 
 const app = new Hono();
 
@@ -56,6 +57,9 @@ api.get('/', (c) => {
       'associations/discover': 'GET /api/v1/associations/discover',
       'associations/hubs': 'GET /api/v1/associations/hubs',
       'associations/network-stats': 'GET /api/v1/associations/network-stats',
+      'meta/conversation-end': 'POST /api/v1/meta/conversation-end',
+      'meta/reflection': 'GET /api/v1/meta/reflection',
+      'meta/manual-reflection': 'POST /api/v1/meta/manual-reflection',
     },
   });
 });
@@ -65,6 +69,9 @@ api.route('/memories', memoriesRoutes);
 
 // Mount association routes
 api.route('/associations', associationsRoutes);
+
+// Mount meta-cognitive routes
+api.route('/meta', metaRoutes);
 
 // Mount API routes
 app.route('/api/v1', api);

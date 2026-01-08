@@ -48,6 +48,8 @@ Currently no authentication (v1 development).
 - `ASSOCIATION_DISCOVERY_ERROR` - Failed to discover associations (500)
 - `HUB_DISCOVERY_ERROR` - Failed to find hub memories (500)
 - `NETWORK_STATS_ERROR` - Failed to retrieve network stats (500)
+- `REFLECTION_ERROR` - Failed to generate reflection (500)
+- `REFLECTION_RETRIEVAL_ERROR` - Failed to retrieve reflections (500)
 
 ---
 
@@ -467,3 +469,190 @@ None currently (v1 development).
 ## Versioning
 API version: `v1`
 Current version: `1.0.0`
+
+---
+
+### Meta-Cognitive Reflection
+
+#### POST /api/v1/meta/conversation-end
+Trigger system reflection after a conversation ends.
+
+**Request Body**:
+```json
+{
+  "conversationId": "uuid (required)",
+  "sessionMetrics": {
+    "memories_loaded": 25,
+    "memories_accessed": 20,
+    "context_load_time_ms": 150,
+    "queries_executed": 5,
+    "total_results_returned": 45,
+    "total_relevance_score": 32.5,
+    "relevant_results": 38
+  }
+}
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "reflection": {
+      "id": "uuid",
+      "reflection_type": "conversation_end",
+      "conversation_id": "uuid",
+      "metrics": {
+        "friction": {
+          "context_load_time_ms": 150,
+          "memories_loaded": 25,
+          "memories_accessed": 20,
+          "waste_ratio": 0.2,
+          "feel": "smooth"
+        },
+        "retrieval": {
+          "queries_executed": 5,
+          "avg_results_returned": 9,
+          "avg_relevance_score": 0.72,
+          "hit_rate": 0.84
+        },
+        "tier_distribution": {
+          "active": 45,
+          "thread": 120,
+          "stable": 890,
+          "network": 1200
+        },
+        "top_hubs": [
+          {
+            "memory_id": "uuid",
+            "connection_count": 23,
+            "content_preview": "Hub memory preview...",
+            "tier": "stable"
+          }
+        ]
+      },
+      "insights": [
+        "System friction is low - context loading is efficient",
+        "High hit rate suggests excellent query relevance"
+      ],
+      "recommendations": [
+        "Continue current bootstrap strategy",
+        "Consider caching frequently accessed memories"
+      ],
+      "created_at": "2026-01-08T20:00:00Z"
+    }
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Metrics Explained**:
+
+- **Friction Metrics** - How smooth is the system?
+  - `context_load_time_ms` - Time to load initial context
+  - `memories_loaded` - Total memories loaded
+  - `memories_accessed` - Memories actually used
+  - `waste_ratio` - (loaded - accessed) / loaded (0-1, lower is better)
+  - `feel` - "smooth" | "sticky" | "rough"
+
+- **Retrieval Metrics** - How well are queries working?
+  - `queries_executed` - Number of queries in session
+  - `avg_results_returned` - Average results per query
+  - `avg_relevance_score` - Average similarity score (0-1)
+  - `hit_rate` - Relevant results / total results (0-1)
+
+- **Tier Distribution** - Memory distribution across tiers
+
+- **Top Hubs** - Most connected memories in network
+
+**Notes**:
+- Automatically stores reflection in `meta_reflections` table
+- Generates human-readable insights and recommendations
+- All metrics optional - calculates based on provided data
+
+---
+
+#### GET /api/v1/meta/reflection
+Retrieve stored reflections.
+
+**Query Parameters**:
+- `conversationId` (optional): UUID to filter by conversation
+- `reflectionType` (optional): Filter by type: 'conversation_end', 'weekly', 'manual'
+- `limit` (optional): Number to return 1-50, default 1
+
+**Examples**:
+```
+GET /api/v1/meta/reflection?conversationId=550e8400-e29b-41d4-a716-446655440000
+GET /api/v1/meta/reflection?reflectionType=conversation_end&limit=10
+GET /api/v1/meta/reflection?limit=5
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "reflections": [
+      {
+        "id": "uuid",
+        "reflection_type": "conversation_end",
+        "conversation_id": "uuid",
+        "metrics": { ... },
+        "insights": [ ... ],
+        "recommendations": [ ... ],
+        "created_at": "2026-01-08T20:00:00Z"
+      }
+    ],
+    "count": 1
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Notes**:
+- Without filters, returns most recent reflections globally
+- With conversationId, returns reflections for that conversation
+- With reflectionType, returns reflections of that type
+
+---
+
+#### POST /api/v1/meta/manual-reflection
+Manually trigger a reflection (for testing/debugging).
+
+**Request Body**:
+```json
+{
+  "conversationId": "uuid (optional)",
+  "sessionMetrics": {
+    // Same as conversation-end endpoint
+  }
+}
+```
+
+**Response**: 200 OK (same structure as conversation-end)
+
+**Notes**:
+- Creates reflection with type 'manual'
+- Useful for testing reflection logic
+- ConversationId optional for manual reflections
+
+---
+
+## Data Types
+
+### Reflection Type Enum
+- `conversation_end` - Generated after conversation ends
+- `weekly` - Periodic weekly reflection (future)
+- `manual` - Manually triggered reflection
+
+### Feel Enum
+- `smooth` - Low friction, efficient operation
+- `sticky` - Some friction present
+- `rough` - High friction, needs optimization
+

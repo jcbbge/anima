@@ -196,3 +196,42 @@ export const networkStatsSchema = z.object({
     .string()
     .uuid('Memory ID must be a valid UUID'),
 });
+
+/**
+ * Schema for triggering conversation-end reflection
+ */
+export const conversationEndSchema = z.object({
+  conversationId: z
+    .string()
+    .uuid('Conversation ID must be a valid UUID'),
+  
+  sessionMetrics: z.object({
+    memories_loaded: z.number().int().nonnegative().optional(),
+    memories_accessed: z.number().int().nonnegative().optional(),
+    context_load_time_ms: z.number().nonnegative().optional(),
+    queries_executed: z.number().int().nonnegative().optional(),
+    total_results_returned: z.number().int().nonnegative().optional(),
+    total_relevance_score: z.number().nonnegative().optional(),
+    relevant_results: z.number().int().nonnegative().optional(),
+  }).optional(),
+});
+
+/**
+ * Schema for getting reflections (query params)
+ */
+export const getReflectionsSchema = z.object({
+  conversationId: z
+    .string()
+    .uuid('Conversation ID must be a valid UUID')
+    .optional(),
+  
+  limit: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive().max(50))
+    .default('1'),
+  
+  reflectionType: z
+    .enum(['conversation_end', 'weekly', 'manual'])
+    .optional(),
+});
