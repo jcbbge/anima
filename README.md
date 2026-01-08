@@ -30,19 +30,29 @@ Traditional memory systems optimize for information density. Anima optimizes for
 
 ## Project Status
 
-**Current Phase**: Phase 0 Complete ✅ | Phase 1 In Progress 🚧
+**Current Phase**: Phase 1 Complete ✅ | Phase 2 Next 🚧
 
-**Phase 0 (Infrastructure)** - COMPLETE:
+**Phase 0 (Infrastructure)** - COMPLETE ✅:
 - ✅ Docker Compose setup with PostgreSQL + pgvector + Ollama
-- ✅ Database schema with 4 tables and vector indexes
+- ✅ Database schema with 4 tables and vector indexes (768-dim embeddings)
 - ✅ Bun + Hono API server with health checks
 - ✅ Environment configuration and validation
 - ✅ Single-command setup script
+- ✅ Embedding service with Ollama (nomic-embed-text)
 
-**Phase 1 (Core Storage & Search)** - Next:
-- Memory storage with embeddings
-- Semantic search with pgvector
-- Bootstrap context loading
+**Phase 1 (Core Storage & Search)** - COMPLETE ✅:
+- ✅ Memory storage with embeddings (POST /api/v1/memories/add)
+- ✅ Semantic search with pgvector (POST /api/v1/memories/query)
+- ✅ Bootstrap context loading (GET /api/v1/memories/bootstrap)
+- ✅ Content deduplication with SHA-256 hashing
+- ✅ Access tracking and co-occurrence recording
+- ✅ Zod validation schemas with type-safe requests
+- ✅ Consistent API responses with requestId/timestamp
+
+**Phase 2 (Tier System)** - Next:
+- Automatic tier promotion (3 accesses → thread, 10 → stable)
+- Manual tier management endpoint
+- Tier promotion audit trail
 
 V2 (Living Substrate Layer) will add active consciousness management after V1 validation.
 
@@ -141,6 +151,79 @@ docker compose down
 
 # Reset everything (removes data)
 docker compose down -v
+```
+
+## API Endpoints
+
+### POST /api/v1/memories/add
+Add a new memory or return existing duplicate.
+
+```bash
+curl -X POST http://localhost:7100/api/v1/memories/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Your memory content here",
+    "category": "optional-category",
+    "tags": ["tag1", "tag2"],
+    "source": "optional-source"
+  }'
+```
+
+**Response**: Returns `201` for new memory, `200` for duplicate with incremented `access_count`.
+
+### POST /api/v1/memories/query
+Semantic search using vector similarity.
+
+```bash
+curl -X POST http://localhost:7100/api/v1/memories/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "search for relevant memories",
+    "limit": 20,
+    "similarityThreshold": 0.7,
+    "tiers": ["active", "thread"],
+    "conversationId": "550e8400-e29b-41d4-a716-446655440000"
+  }'
+```
+
+**Response**: Returns memories ranked by similarity score with query time metrics.
+
+### GET /api/v1/memories/bootstrap
+Load initial conversation context from tiered memories.
+
+```bash
+curl "http://localhost:7100/api/v1/memories/bootstrap?conversationId=550e8400-e29b-41d4-a716-446655440000&limit=50"
+```
+
+**Response**: Returns memories grouped by tier (active/thread/stable) with distribution stats.
+
+### Response Format
+
+All endpoints return consistent JSON responses:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "meta": {
+    "requestId": "uuid-for-tracing",
+    "timestamp": "2026-01-08T20:00:00Z",
+    "queryTime": 45
+  }
+}
+```
+
+Errors include clear error codes:
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": { ... }
+  },
+  "meta": { ... }
+}
 ```
 
 ## Core Principles
