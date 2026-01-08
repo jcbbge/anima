@@ -149,3 +149,50 @@ export const errorResponseSchema = z.object({
   }),
   meta: responseMetaSchema.optional(),
 });
+
+/**
+ * Schema for discovering associations (query params)
+ */
+export const discoverAssociationsSchema = z.object({
+  memoryId: z
+    .string()
+    .uuid('Memory ID must be a valid UUID'),
+  
+  minStrength: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().min(0).max(1))
+    .default('0.1'),
+  
+  limit: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive().max(100))
+    .default('20'),
+});
+
+/**
+ * Schema for finding hub memories (query params)
+ */
+export const findHubsSchema = z.object({
+  limit: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive().max(50))
+    .default('10'),
+  
+  minConnections: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive())
+    .default('5'),
+});
+
+/**
+ * Schema for getting network stats (query params)
+ */
+export const networkStatsSchema = z.object({
+  memoryId: z
+    .string()
+    .uuid('Memory ID must be a valid UUID'),
+});

@@ -44,6 +44,10 @@ Currently no authentication (v1 development).
 - `MEMORY_ADD_ERROR` - Failed to add memory (500)
 - `MEMORY_QUERY_ERROR` - Failed to query memories (500)
 - `BOOTSTRAP_ERROR` - Failed to load bootstrap context (500)
+- `TIER_UPDATE_ERROR` - Failed to update memory tier (500)
+- `ASSOCIATION_DISCOVERY_ERROR` - Failed to discover associations (500)
+- `HUB_DISCOVERY_ERROR` - Failed to find hub memories (500)
+- `NETWORK_STATS_ERROR` - Failed to retrieve network stats (500)
 
 ---
 
@@ -225,6 +229,186 @@ Load initial conversation context from tiered memories.
 3. Thread tier: ordered by access_count DESC, last_accessed DESC
 4. Stable tier: ordered by access_count DESC, last_accessed DESC
 5. Updates access tracking for all loaded memories
+
+---
+
+### Tier Management
+
+#### POST /api/v1/memories/update-tier
+Manually promote or demote a memory between tiers.
+
+**Request Body**:
+```json
+{
+  "memoryId": "uuid (required)",
+  "tier": "active | thread | stable | network (required)",
+  "reason": "Optional reason string (max 200 chars)"
+}
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "memory": {
+      "id": "uuid",
+      "tier": "stable",
+      "tier_last_updated": "2026-01-08T20:00:00Z"
+    },
+    "promotion_recorded": true,
+    "message": "Tier updated successfully"
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Notes**:
+- Records tier change in `tier_promotions` audit table
+- Updates `tier_last_updated` timestamp
+- Validates tier enum values
+
+---
+
+### Association Discovery
+
+#### GET /api/v1/associations/discover
+Find memories associated with a given memory through co-occurrence patterns.
+
+**Query Parameters**:
+- `memoryId` (required): UUID of memory to find associations for
+- `minStrength` (optional): Minimum association strength 0-1, default 0.1
+- `limit` (optional): Maximum associations to return 1-100, default 20
+
+**Example**:
+```
+GET /api/v1/associations/discover?memoryId=550e8400-e29b-41d4-a716-446655440000&minStrength=0.2&limit=10
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "memory_id": "550e8400-e29b-41d4-a716-446655440000",
+    "associations": [
+      {
+        "associated_memory_id": "uuid",
+        "associated_content": "Related memory content...",
+        "associated_tier": "thread",
+        "associated_category": "project",
+        "associated_tags": ["tag1", "tag2"],
+        "associated_access_count": 5,
+        "strength": 0.45,
+        "co_occurrence_count": 12,
+        "first_co_occurred": "2026-01-01T10:00:00Z",
+        "last_co_occurred": "2026-01-08T20:00:00Z",
+        "conversation_contexts": ["uuid1", "uuid2"]
+      }
+    ],
+    "total_associations": 1
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Association Strength Formula**:
+```
+strength = LOG(1 + co_occurrence_count) / 10.0
+```
+
+**Notes**:
+- Associations created when memories appear together in query results
+- Bidirectional: A→B and B→A both discoverable
+- Ordered by strength DESC, then co_occurrence_count DESC
+
+---
+
+#### GET /api/v1/associations/hubs
+Find hub memories (most connected nodes in the memory network).
+
+**Query Parameters**:
+- `limit` (optional): Number of top hubs to return 1-50, default 10
+- `minConnections` (optional): Minimum connections to qualify as hub, default 5
+
+**Example**:
+```
+GET /api/v1/associations/hubs?limit=5&minConnections=10
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "hubs": [
+      {
+        "memory_id": "uuid",
+        "content": "Hub memory content...",
+        "tier": "stable",
+        "category": "core-concept",
+        "access_count": 45,
+        "created_at": "2026-01-01T10:00:00Z",
+        "network_stats": {
+          "total_connections": 23,
+          "total_co_occurrences": 67,
+          "avg_strength": 0.42
+        }
+      }
+    ]
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Notes**:
+- Hubs are memories with high connection counts
+- Useful for identifying central concepts/patterns
+- Ordered by total_connections DESC, then avg_strength DESC
+
+---
+
+#### GET /api/v1/associations/network-stats
+Get network statistics for a specific memory.
+
+**Query Parameters**:
+- `memoryId` (required): UUID of memory to analyze
+
+**Example**:
+```
+GET /api/v1/associations/network-stats?memoryId=550e8400-e29b-41d4-a716-446655440000
+```
+
+**Response**: 200 OK
+```json
+{
+  "success": true,
+  "data": {
+    "memory_id": "550e8400-e29b-41d4-a716-446655440000",
+    "total_associations": 15,
+    "avg_strength": 0.35,
+    "max_strength": 0.68,
+    "total_co_occurrences": 42
+  },
+  "meta": {
+    "requestId": "uuid",
+    "timestamp": "2026-01-08T20:00:00Z"
+  }
+}
+```
+
+**Notes**:
+- Shows how connected this memory is to others
+- Useful for understanding memory importance in network
 
 ---
 

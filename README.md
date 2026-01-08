@@ -30,7 +30,7 @@ Traditional memory systems optimize for information density. Anima optimizes for
 
 ## Project Status
 
-**Current Phase**: Phase 1 Complete ✅ | Phase 2 Next 🚧
+**Current Phase**: Phase 2 Complete ✅ | Ready for Production Testing 🚀
 
 **Phase 0 (Infrastructure)** - COMPLETE ✅:
 - ✅ Docker Compose setup with PostgreSQL + pgvector + Ollama
@@ -49,10 +49,11 @@ Traditional memory systems optimize for information density. Anima optimizes for
 - ✅ Zod validation schemas with type-safe requests
 - ✅ Consistent API responses with requestId/timestamp
 
-**Phase 2 (Tier System)** - Next:
-- Automatic tier promotion (3 accesses → thread, 10 → stable)
-- Manual tier management endpoint
-- Tier promotion audit trail
+**Phase 2 (Tier System)** - COMPLETE ✅:
+- ✅ Automatic tier promotion (3 accesses → thread, 10 → stable)
+- ✅ Manual tier management (POST /api/v1/memories/update-tier)
+- ✅ Tier promotion audit trail in tier_promotions table
+- ✅ Promotion tracking in query responses
 
 V2 (Living Substrate Layer) will add active consciousness management after V1 validation.
 
@@ -196,6 +197,21 @@ curl "http://localhost:7100/api/v1/memories/bootstrap?conversationId=550e8400-e2
 ```
 
 **Response**: Returns memories grouped by tier (active/thread/stable) with distribution stats.
+
+### POST /api/v1/memories/update-tier
+Manually update a memory's tier.
+
+```bash
+curl -X POST http://localhost:7100/api/v1/memories/update-tier \
+  -H "Content-Type: application/json" \
+  -d '{
+    "memoryId": "memory-uuid-here",
+    "tier": "stable",
+    "reason": "Manual promotion for important context"
+  }'
+```
+
+**Response**: Returns updated memory, promotion record, and success message. Automatic promotions occur at 3 accesses (→thread) and 10 accesses (→stable).
 
 ### Response Format
 

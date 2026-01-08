@@ -1,7 +1,7 @@
 # Anima V1 - Completed Work Summary
 
 ## Overview
-Phase 0 (Infrastructure) and Phase 1 (Core Storage & Search) are **COMPLETE** and fully functional.
+**Phases 0-3 COMPLETE**: Infrastructure, Core Storage & Search, Tier System, and Association Analytics are fully functional and tested.
 
 ---
 
@@ -85,6 +85,10 @@ http://localhost:7100
 2. **POST /api/v1/memories/add** - Add/update memory
 3. **POST /api/v1/memories/query** - Semantic search
 4. **GET /api/v1/memories/bootstrap** - Load context
+5. **POST /api/v1/memories/update-tier** - Manual tier management
+6. **GET /api/v1/associations/discover** - Find associated memories
+7. **GET /api/v1/associations/hubs** - Find hub memories
+8. **GET /api/v1/associations/network-stats** - Get network statistics
 
 ### Response Format
 All endpoints return consistent JSON:
@@ -105,6 +109,10 @@ All endpoints return consistent JSON:
 - `MEMORY_ADD_ERROR` (500)
 - `MEMORY_QUERY_ERROR` (500)
 - `BOOTSTRAP_ERROR` (500)
+- `TIER_UPDATE_ERROR` (500)
+- `ASSOCIATION_DISCOVERY_ERROR` (500)
+- `HUB_DISCOVERY_ERROR` (500)
+- `NETWORK_STATS_ERROR` (500)
 
 ---
 
@@ -177,16 +185,32 @@ All endpoints return consistent JSON:
 2. **Semantic search** with vector similarity
 3. **Context loading** with tiered priorities
 4. **Access tracking** for all operations
-5. **Co-occurrence learning** between memories
-6. **Conversation tracking** with UUIDs
-7. **Type-safe validation** with Zod
-8. **Consistent API responses** with tracing
+5. **Tier management** with automatic promotion (3→thread, 10→stable)
+6. **Association discovery** through co-occurrence patterns
+7. **Hub detection** for highly connected memories
+8. **Network statistics** for memory connectivity
+9. **Co-occurrence learning** between memories
+10. **Conversation tracking** with UUIDs
+11. **Type-safe validation** with Zod
+12. **Consistent API responses** with tracing
 
-### What's Next (Phase 2) 🚧
-1. Automatic tier promotion (3 accesses → thread, 10 → stable)
-2. Manual tier management endpoint
-3. Tier promotion audit trail
-4. Time-based tier decay
+### Phase 2: Tier System ✅ COMPLETE
+1. ✅ Automatic tier promotion (3 accesses → thread, 10 → stable)
+2. ✅ Manual tier management endpoint (POST /api/v1/memories/update-tier)
+3. ✅ Tier promotion audit trail (tier_promotions table)
+
+### Phase 3: Association Analytics ✅ COMPLETE
+1. ✅ Association discovery (GET /api/v1/associations/discover)
+2. ✅ Hub detection (GET /api/v1/associations/hubs)
+3. ✅ Network statistics (GET /api/v1/associations/network-stats)
+4. ✅ Co-occurrence tracking (automatic during queries)
+5. ✅ Association strength calculation (log-based formula)
+
+### What's Next (Phase 4) 🚧
+1. Meta-cognitive reflection after conversations
+2. Friction metrics (load time, waste ratio)
+3. Retrieval metrics (hit rate, avg relevance)
+4. System-generated insights and recommendations
 
 ---
 

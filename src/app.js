@@ -9,6 +9,7 @@ import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { requestId } from 'hono/request-id';
 import memoriesRoutes from './routes/memories.js';
+import associationsRoutes from './routes/associations.js';
 
 const app = new Hono();
 
@@ -51,12 +52,19 @@ api.get('/', (c) => {
       'memories/add': 'POST /api/v1/memories/add',
       'memories/query': 'POST /api/v1/memories/query',
       'memories/bootstrap': 'GET /api/v1/memories/bootstrap',
+      'memories/update-tier': 'POST /api/v1/memories/update-tier',
+      'associations/discover': 'GET /api/v1/associations/discover',
+      'associations/hubs': 'GET /api/v1/associations/hubs',
+      'associations/network-stats': 'GET /api/v1/associations/network-stats',
     },
   });
 });
 
 // Mount memory routes
 api.route('/memories', memoriesRoutes);
+
+// Mount association routes
+api.route('/associations', associationsRoutes);
 
 // Mount API routes
 app.route('/api/v1', api);
