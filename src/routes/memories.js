@@ -10,12 +10,14 @@ import {
   addMemorySchema,
   queryMemoriesSchema,
   bootstrapSchema,
+  updateTierSchema,
 } from '../schemas/memory.schema.js';
 import {
   addMemory,
   queryMemories,
   loadBootstrap,
 } from '../services/memoryService.js';
+import { updateMemoryTier } from '../services/tierService.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
 const memories = new Hono();
@@ -154,6 +156,91 @@ memories.get(
         c,
         error.code || 'BOOTSTRAP_ERROR',
         error.message || 'Failed to load bootstrap context',
+        500,
+        { details: error.details }
+      );
+    }
+  }
+);
+
+/**
+ * POST /update-tier - Manually update memory tier
+ */
+memories.post(
+  '/update-tier',
+  zValidator('json', updateTierSchema, (result, c) => {
+    if (!result.success) {
+      return errorResponse(
+        c,
+        'VALIDATION_ERROR',
+        'Request validation failed',
+        400,
+        { issues: result.error.issues }
+      );
+    }
+  }),
+  async (c) => {
+    try {
+      const data = c.req.valid('json');
+      const result = await updateMemoryTier({
+        memoryId: data.memoryId,
+        newTier: data.tier,
+        reason: data.reason || 'manual',
+      });
+
+      // Return 404 if memory not found
+      if (!result.memory) {
+        return errorResponse(
+          c,
+          'MEMORY_NOT_FOUND',
+          'Memory not found',
+          404,
+          { memoryId: data.memoryId }
+        );
+      }
+
+      return successResponse(
+        c,
+        {
+          memory: {
+            id: result.memory.id,
+            tier: result.memory.tier,
+            tierLastUpdated: result.memory.tier_last_updated,
+          },
+          promotion: result.promotion,
+          message: result.message,
+        },
+        200
+      );
+    } catch (error) {
+      console.error('Error updating tier:', error);
+      
+      // Handle memory not found
+      if (error.code === 'MEMORY_NOT_FOUND') {
+        return errorResponse(
+          c,
+          'MEMORY_NOT_FOUND',
+          error.message,
+          404,
+          error.details
+        );
+      }
+      
+      // Handle invalid tier
+      if (error.code === 'INVALID_TIER') {
+        return errorResponse(
+          c,
+          'INVALID_TIER',
+          error.message,
+          400,
+          error.details
+        );
+      }
+      
+      return errorResponse(
+        c,
+        error.code || 'TIER_UPDATE_ERROR',
+        error.message || 'Failed to update tier',
         500,
         { details: error.details }
       );
