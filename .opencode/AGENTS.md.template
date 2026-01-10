@@ -5,7 +5,7 @@
 **At the START of EVERY conversation, immediately call:**
 
 ```
-anima_bootstrap
+anima({ command: "bootstrap" })
 ```
 
 This will:
@@ -21,11 +21,12 @@ This will:
 
 ## Using Anima Throughout Conversation
 
-After bootstrap, use Anima tools proactively:
+After bootstrap, use the `anima` tool with different commands:
 
 **Query when user references past work:**
 ```
-anima_query({
+anima({
+  command: "query",
   searchQuery: "topic or question",
   limit: 5
 })
@@ -33,14 +34,16 @@ anima_query({
 
 **Store insights as they emerge:**
 ```
-anima_store({
+anima({
+  command: "store",
   content: "insight or decision text"
 })
 ```
 
 **Mark breakthroughs and paradigm shifts:**
 ```
-anima_store({
+anima({
+  command: "store",
   content: "breakthrough insight",
   catalyst: true  // Adds φ=1.0 weight
 })
@@ -48,20 +51,23 @@ anima_store({
 
 **View high-resonance memories:**
 ```
-anima_catalysts({ limit: 10 })
+anima({
+  command: "catalysts",
+  limit: 10
+})
 ```
 
 ---
 
-## Available Tools
+## The Anima Tool
 
-You have these Anima tools:
-- `anima_bootstrap` - Load context (call first)
-- `anima_query` - Search memories
-- `anima_store` - Save insights
-- `anima_catalysts` - View breakthroughs
+Single tool with commands:
+- `bootstrap` - Load context (call first)
+- `query` - Search memories semantically
+- `store` - Save insights and decisions
+- `catalysts` - View breakthrough moments
 
-All return formatted output. Use them liberally.
+All return formatted output. Use liberally.
 
 ---
 
@@ -83,6 +89,6 @@ The user installed Anima for YOU. Use it.
 - **Location:** ~/.anima/
 - **API:** http://localhost:7100
 - **Database:** PostgreSQL at localhost:7101
-- **CLI:** ~/bin/anima (backup if tools fail)
+- **CLI:** ~/bin/anima (backup if tool fails)
 
-If tools fail, services aren't running. Call `anima_bootstrap` to fix.
+If tool fails, services aren't running. Call `anima({ command: "bootstrap" })` to fix.
