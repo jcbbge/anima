@@ -3,23 +3,7 @@ import os from "os"
 
 const homeDir = os.homedir()
 const animaBin = `${homeDir}/bin/anima`
-
-// Check which location Anima is installed at
-function getAnimaDir(): string {
-  const hiddenPath = `${homeDir}/.anima`
-  const visiblePath = `${homeDir}/anima`
-  
-  // Check if .anima exists first (install script default)
-  try {
-    const fs = require('fs')
-    if (fs.existsSync(hiddenPath)) {
-      return hiddenPath
-    }
-  } catch {}
-  
-  // Fall back to ~/anima (dev install)
-  return visiblePath
-}
+const animaDir = `${homeDir}/.anima`
 
 export default tool({
   description: "Anima memory system - persistent memory across conversation boundaries",
@@ -42,17 +26,12 @@ export default tool({
           const limit = args.limit || 10
           
           // Check Docker
-          try {
-            const dockerCheck = await Bun.$`docker ps | grep anima-postgres`.quiet().nothrow()
-            
-            if (!dockerCheck.stdout.toString().trim()) {
-              // Start services
-              const animaDir = getAnimaDir()
-              await Bun.$`cd ${animaDir} && docker compose up -d`.quiet()
-              await Bun.$`sleep 3`
-            }
-          } catch (dockerError: any) {
-            return `Docker check failed: ${dockerError.message}`
+          const dockerCheck = await Bun.$`docker ps | grep anima-postgres`.quiet().nothrow()
+          
+          if (!dockerCheck.stdout.toString().trim()) {
+            // Start services
+            await Bun.$`cd ${animaDir} && docker compose up -d`.quiet()
+            await Bun.$`sleep 3`
           }
           
           // Run bootstrap
@@ -87,7 +66,7 @@ export default tool({
           return `Unknown command: ${command}`
       }
     } catch (error: any) {
-      return `Tool error: ${error.message}\nCommand: ${args.command}`
+      return `Tool error: ${error.message}`
     }
   },
 })
