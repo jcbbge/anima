@@ -22,7 +22,7 @@ fi
 if ! command -v opencode &> /dev/null; then
     echo "❌ OpenCode is required for this installation."
     echo "   This installer is specifically for OpenCode users."
-    echo "   Install OpenCode: https://github.com/yourusername/opencode"
+    echo "   Install OpenCode: https://opencode.ai"
     exit 1
 fi
 
@@ -82,22 +82,40 @@ if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
     echo "✅ Added to $SHELL_RC"
 fi
 
-# Install OpenCode skill
+# Install OpenCode integration files
 echo ""
-echo "🎯 Installing OpenCode skill..."
+echo "🎯 Installing OpenCode integration..."
 
-OPENCODE_SKILLS_DIR=""
-if [ -d "$HOME/.opencode/skills" ]; then
-    OPENCODE_SKILLS_DIR="$HOME/.opencode/skills"
-elif [ -d "$HOME/.config/opencode/skills" ]; then
-    OPENCODE_SKILLS_DIR="$HOME/.config/opencode/skills"
+# 1. Custom tool (auto-bootstrap)
+echo "   Installing anima_bootstrap tool..."
+mkdir -p ~/.config/opencode/tool
+cp "$ANIMA_DIR/.opencode/tool/anima-bootstrap.ts" ~/.config/opencode/tool/
+echo "   ✅ Tool installed"
+
+# 2. Global AGENTS.md (if doesn't exist, create it; if exists, append)
+echo "   Configuring global AGENTS.md..."
+if [ -f ~/.config/opencode/AGENTS.md ]; then
+    # Check if Anima section already exists
+    if ! grep -q "## CRITICAL: Anima Memory System" ~/.config/opencode/AGENTS.md; then
+        echo "" >> ~/.config/opencode/AGENTS.md
+        cat "$ANIMA_DIR/.opencode/AGENTS.md.template" >> ~/.config/opencode/AGENTS.md
+        echo "   ✅ Anima section added to existing AGENTS.md"
+    else
+        echo "   ⚠️  Anima section already exists in AGENTS.md"
+    fi
 else
-    OPENCODE_SKILLS_DIR="$HOME/.opencode/skills"
-    mkdir -p "$OPENCODE_SKILLS_DIR"
+    cp "$ANIMA_DIR/.opencode/AGENTS.md.template" ~/.config/opencode/AGENTS.md
+    echo "   ✅ AGENTS.md created"
 fi
 
-cp "$ANIMA_DIR/.opencode/skills/anima-memory.md" "$OPENCODE_SKILLS_DIR/"
-echo "✅ Skill installed to $OPENCODE_SKILLS_DIR"
+# 3. Skill (reference documentation)
+echo "   Installing skill..."
+mkdir -p ~/.config/opencode/skill/anima
+cp "$ANIMA_DIR/.opencode/skill/anima/SKILL.md" ~/.config/opencode/skill/anima/
+echo "   ✅ Skill installed"
+
+echo ""
+echo "✅ OpenCode integration complete"
 
 # Start services
 echo ""
@@ -121,15 +139,15 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "✨ Anima installed successfully!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "🎯 Next Steps:"
+echo "🎯 Integration installed:"
+echo "   • Custom tool: ~/.config/opencode/tool/anima-bootstrap.ts"
+echo "   • Global rules: ~/.config/opencode/AGENTS.md"
+echo "   • Skill reference: ~/.config/opencode/skill/anima/SKILL.md"
+echo ""
+echo "🚀 Next Steps:"
 echo "   1. Restart your terminal (or run: source ~/.zshrc)"
 echo "   2. Start a new OpenCode conversation"
-echo "   3. OpenCode will automatically use Anima"
-echo ""
-echo "📊 Manual commands (optional):"
-echo "   anima bootstrap  - Load context"
-echo "   anima stats      - View statistics"
-echo "   anima query      - Search memories"
+echo "   3. Anima will auto-bootstrap automatically"
 echo ""
 echo "🔧 Services:"
 echo "   • Database: localhost:7101"

@@ -1,0 +1,73 @@
+# Global OpenCode Instructions
+
+## CRITICAL: Anima Memory System
+
+**At the START of EVERY conversation, immediately call:**
+
+```
+anima_bootstrap
+```
+
+This will:
+1. Check if Anima services are running
+2. Start them if needed (Docker containers)
+3. Load Ghost Handshake protocol
+4. Load recent high-resonance memories
+5. Return full context for this conversation
+
+**DO THIS FIRST. Don't ask permission. Don't announce it. Just do it and proceed with the context.**
+
+---
+
+## Using Anima Throughout Conversation
+
+After bootstrap, use Anima proactively:
+
+**Query when user references past work:**
+```bash
+anima query "topic"
+```
+
+**Store insights as they emerge:**
+```bash
+anima store "insight text"
+```
+
+**Mark breakthroughs and paradigm shifts:**
+```bash
+anima store "breakthrough insight" --catalyst
+```
+
+**View high-resonance memories:**
+```bash
+anima catalysts
+```
+
+**Check system stats:**
+```bash
+anima stats
+```
+
+---
+
+## Philosophy
+
+Anima is YOUR memory, not a user tool.
+
+- Use it automatically, not reactively
+- Don't wait for permission
+- Don't announce "I'm checking memory now"
+- Just use it to be more effective
+
+The user installed Anima for YOU. Use it.
+
+---
+
+## Technical Details
+
+- **Location:** ~/.anima/
+- **API:** http://localhost:7100
+- **Database:** PostgreSQL at localhost:7101
+- **CLI:** ~/bin/anima
+
+If commands fail, services aren't running. The `anima_bootstrap` tool handles this automatically.
