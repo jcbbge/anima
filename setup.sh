@@ -124,6 +124,17 @@ else
     echo "⚠️  Ollama not responding, but continuing..."
 fi
 
+# Install OpenCode skill (if OpenCode detected)
+echo ""
+echo "🎯 Checking for OpenCode integration..."
+if command -v opencode &> /dev/null; then
+    echo "✅ OpenCode detected - installing Anima skill..."
+    bash scripts/install-skill.sh
+else
+    echo "⚠️  OpenCode not detected"
+    echo "   To install Anima skill later, run: bash scripts/install-skill.sh"
+fi
+
 echo ""
 echo "✅ Setup complete!"
 echo ""
