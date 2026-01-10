@@ -32,6 +32,11 @@ export const addMemorySchema = z.object({
     .min(1)
     .max(100)
     .optional(),
+  
+  isCatalyst: z
+    .boolean()
+    .optional()
+    .default(false),
 });
 
 /**

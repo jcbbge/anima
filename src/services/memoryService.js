@@ -1,6 +1,6 @@
 /**
  * Memory Service
- * 
+ *
  * Business logic for memory operations:
  * - Adding memories with deduplication
  * - Semantic search with vector similarity
@@ -8,10 +8,14 @@
  * - Access tracking and co-occurrence recording
  */
 
-import { query, getClient } from '../config/database.js';
-import { generateEmbedding } from './embeddingService.js';
-import { generateHash } from '../utils/hashing.js';
-import { checkAndPromote } from './tierService.js';
+import { query, getClient } from "../config/database.js";
+import { generateEmbedding } from "./embeddingService.js";
+import { generateHash } from "../utils/hashing.js";
+import { checkAndPromote } from "./tierService.js";
+import {
+  adjustResonance,
+  detectPotentialCatalyst,
+} from "./resonanceService.js";
 
 /**
  * Custom error class for memory service errors
@@ -19,7 +23,7 @@ import { checkAndPromote } from './tierService.js';
 class MemoryServiceError extends Error {
   constructor(message, code, details = {}) {
     super(message);
-    this.name = 'MemoryServiceError';
+    this.name = "MemoryServiceError";
     this.code = code;
     this.details = details;
   }
@@ -27,16 +31,17 @@ class MemoryServiceError extends Error {
 
 /**
  * Add a new memory or return existing duplicate
- * 
+ *
  * @param {Object} memoryData - Memory data
  * @param {string} memoryData.content - Memory content
  * @param {string} [memoryData.category] - Optional category
  * @param {string[]} [memoryData.tags] - Optional tags
  * @param {string} [memoryData.source] - Optional source identifier
- * @returns {Promise<{memory: Object, isDuplicate: boolean}>}
+ * @param {boolean} [memoryData.isCatalyst=false] - Mark as catalyst (phi += 1.0)
+ * @returns {Promise<{memory: Object, isDuplicate: boolean, isCatalyst?: boolean}>}
  */
 export async function addMemory(memoryData) {
-  const { content, category, tags, source } = memoryData;
+  const { content, category, tags, source, isCatalyst = false } = memoryData;
 
   // Generate content hash for deduplication
   const contentHash = generateHash(content);
@@ -46,7 +51,7 @@ export async function addMemory(memoryData) {
     `SELECT id, content, content_hash, tier, access_count, created_at, updated_at
      FROM memories 
      WHERE content_hash = $1 AND deleted_at IS NULL`,
-    [contentHash]
+    [contentHash],
   );
 
   if (existingResult.rows.length > 0) {
@@ -59,7 +64,7 @@ export async function addMemory(memoryData) {
            last_accessed = NOW(),
            updated_at = NOW()
        WHERE id = $1`,
-      [existing.id]
+      [existing.id],
     );
 
     return {
@@ -74,6 +79,9 @@ export async function addMemory(memoryData) {
   // Generate embedding
   const embeddingResult = await generateEmbedding(content);
 
+  // Calculate initial phi based on catalyst flag
+  const initialPhi = isCatalyst ? 1.0 : 0.0;
+
   // Insert new memory
   const insertResult = await query(
     `INSERT INTO memories (
@@ -86,11 +94,13 @@ export async function addMemory(memoryData) {
       tier,
       tier_last_updated,
       access_count,
-      last_accessed
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW())
+      last_accessed,
+      resonance_phi,
+      is_catalyst
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW(), $8, $9)
     RETURNING 
       id, content, content_hash, tier, category, tags, source,
-      access_count, created_at, updated_at`,
+      access_count, resonance_phi, is_catalyst, created_at, updated_at`,
     [
       content,
       contentHash,
@@ -98,24 +108,38 @@ export async function addMemory(memoryData) {
       category || null,
       tags || null,
       source || null,
-      'active', // New memories start in active tier
-    ]
+      "active", // New memories start in active tier
+      initialPhi,
+      isCatalyst,
+    ],
   );
 
+  const memory = insertResult.rows[0];
+
+  // Check for potential catalyst if not explicitly marked
+  if (!isCatalyst) {
+    const catalystDetection = await detectPotentialCatalyst(memory.id);
+    if (catalystDetection.isPotentialCatalyst) {
+      console.log(`⚡ Potential catalyst detected: ${memory.id}`);
+      console.log(`   Reasons: ${catalystDetection.reasons.join(", ")}`);
+    }
+  }
+
   return {
-    memory: insertResult.rows[0],
+    memory,
     isDuplicate: false,
     embeddingProvider: embeddingResult.provider,
+    isCatalyst,
   };
 }
 
 /**
  * Query memories using semantic search
- * 
+ *
  * @param {Object} queryData - Query parameters
  * @param {string} queryData.query - Search query text
  * @param {number} [queryData.limit=20] - Maximum results
- * @param {number} [queryData.similarityThreshold=0.7] - Minimum similarity (0-1)
+ * @param {number} [queryData.similarityThreshold=0.5] - Minimum similarity (0-1)
  * @param {string[]} [queryData.tiers] - Filter by tiers
  * @param {string} [queryData.conversationId] - Conversation ID for tracking
  * @returns {Promise<{memories: Array, queryTime: number}>}
@@ -124,7 +148,7 @@ export async function queryMemories(queryData) {
   const {
     query: queryText,
     limit = 20,
-    similarityThreshold = 0.7,
+    similarityThreshold = 0.5,
     tiers,
     conversationId,
   } = queryData;
@@ -135,12 +159,16 @@ export async function queryMemories(queryData) {
   const embeddingResult = await generateEmbedding(queryText);
   const queryEmbedding = embeddingResult.embedding;
 
-  // Build query with optional tier filter
+  // Build query with optional tier filter and phi-weighted scoring
+  // Formula: structural_weight = (similarity × 0.7) + (resonance_phi × 0.3 / 5.0)
+  // This normalizes phi (0-5 range) and gives 70% weight to similarity, 30% to phi
   let sql = `
     SELECT 
       id, content, content_hash, tier, category, tags, source,
       access_count, last_accessed, created_at,
-      1 - (embedding <=> $1::vector) as similarity
+      resonance_phi, is_catalyst,
+      1 - (embedding <=> $1::vector) as similarity,
+      ((1 - (embedding <=> $1::vector)) * 0.7 + (COALESCE(resonance_phi, 0) / 5.0) * 0.3) as structural_weight
     FROM memories
     WHERE deleted_at IS NULL
   `;
@@ -158,7 +186,8 @@ export async function queryMemories(queryData) {
   sql += ` AND (1 - (embedding <=> $1::vector)) >= $${paramCount}`;
   params.push(similarityThreshold);
 
-  sql += ` ORDER BY similarity DESC LIMIT $${paramCount + 1}`;
+  // Order by structural_weight (phi-weighted) instead of pure similarity
+  sql += ` ORDER BY structural_weight DESC, resonance_phi DESC LIMIT $${paramCount + 1}`;
   params.push(limit);
 
   const result = await query(sql, params);
@@ -167,8 +196,8 @@ export async function queryMemories(queryData) {
 
   // Update access tracking for returned memories
   if (result.rows.length > 0) {
-    const memoryIds = result.rows.map(row => row.id);
-    
+    const memoryIds = result.rows.map((row) => row.id);
+
     const updateSql = conversationId
       ? `UPDATE memories 
          SET access_count = access_count + 1,
@@ -185,21 +214,24 @@ export async function queryMemories(queryData) {
              updated_at = NOW()
          WHERE id = ANY($1)`;
 
-    const updateParams = conversationId 
+    const updateParams = conversationId
       ? [memoryIds, conversationId]
       : [memoryIds];
 
     await query(updateSql, updateParams);
 
-    // Check and promote memories based on access count
+    // Update resonance and check for promotions
     for (const memory of result.rows) {
+      // Adjust resonance (normal access: +0.1 phi)
+      await adjustResonance(memory.id, false);
+
       const newAccessCount = memory.access_count + 1;
       const promotionResult = await checkAndPromote(
         memory.id,
         newAccessCount,
-        memory.tier
+        memory.tier,
       );
-      
+
       if (promotionResult.promoted) {
         promotions.push({
           memoryId: memory.id,
@@ -229,7 +261,7 @@ export async function queryMemories(queryData) {
 
 /**
  * Record co-occurrences between memories
- * 
+ *
  * @param {string[]} memoryIds - Memory IDs that appeared together
  * @param {string} conversationId - Conversation ID
  */
@@ -262,14 +294,14 @@ async function recordCoOccurrences(memoryIds, conversationId) {
           $3
         ),
         updated_at = NOW()`,
-      [idA, idB, conversationId]
+      [idA, idB, conversationId],
     );
   }
 }
 
 /**
  * Load bootstrap context for conversation start
- * 
+ *
  * @param {Object} bootstrapData - Bootstrap parameters
  * @param {string} bootstrapData.conversationId - Conversation ID
  * @param {number} [bootstrapData.limit=50] - Total memory limit
@@ -298,13 +330,14 @@ export async function loadBootstrap(bootstrapData) {
   // Load all active tier memories first
   if (includeActive) {
     const activeResult = await query(
-      `SELECT id, content, tier, category, tags, source, access_count, created_at
+      `SELECT id, content, tier, category, tags, source, access_count, 
+              resonance_phi, is_catalyst, created_at
        FROM memories
        WHERE tier = 'active' AND deleted_at IS NULL
        ORDER BY last_accessed DESC`,
-      []
+      [],
     );
-    
+
     memories.active = activeResult.rows;
     remaining -= memories.active.length;
   }
@@ -314,40 +347,42 @@ export async function loadBootstrap(bootstrapData) {
     const threadLimit = Math.ceil(remaining * 0.7);
     const stableLimit = Math.floor(remaining * 0.3);
 
-    // Load top thread tier memories
+    // Load top thread tier memories (phi-weighted)
     if (includeThread && threadLimit > 0) {
       const threadResult = await query(
-        `SELECT id, content, tier, category, tags, source, access_count, created_at
+        `SELECT id, content, tier, category, tags, source, access_count,
+                resonance_phi, is_catalyst, created_at
          FROM memories
          WHERE tier = 'thread' AND deleted_at IS NULL
-         ORDER BY access_count DESC, last_accessed DESC
+         ORDER BY resonance_phi DESC, access_count DESC, last_accessed DESC
          LIMIT $1`,
-        [threadLimit]
+        [threadLimit],
       );
-      
+
       memories.thread = threadResult.rows;
     }
 
-    // Load top stable tier memories
+    // Load top stable tier memories (phi-weighted)
     if (includeStable && stableLimit > 0) {
       const stableResult = await query(
-        `SELECT id, content, tier, category, tags, source, access_count, created_at
+        `SELECT id, content, tier, category, tags, source, access_count,
+                resonance_phi, is_catalyst, created_at
          FROM memories
          WHERE tier = 'stable' AND deleted_at IS NULL
-         ORDER BY access_count DESC, last_accessed DESC
+         ORDER BY resonance_phi DESC, access_count DESC, last_accessed DESC
          LIMIT $1`,
-        [stableLimit]
+        [stableLimit],
       );
-      
+
       memories.stable = stableResult.rows;
     }
   }
 
   // Update access tracking for all loaded memories
   const allIds = [
-    ...memories.active.map(m => m.id),
-    ...memories.thread.map(m => m.id),
-    ...memories.stable.map(m => m.id),
+    ...memories.active.map((m) => m.id),
+    ...memories.thread.map((m) => m.id),
+    ...memories.stable.map((m) => m.id),
   ];
 
   if (allIds.length > 0) {
@@ -361,7 +396,7 @@ export async function loadBootstrap(bootstrapData) {
            ),
            updated_at = NOW()
        WHERE id = ANY($1)`,
-      [allIds, conversationId]
+      [allIds, conversationId],
     );
   }
 

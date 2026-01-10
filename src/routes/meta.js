@@ -14,6 +14,11 @@ import {
   getRecentReflections,
   getReflectionsByType,
 } from '../services/metaService.js';
+import {
+  generateHandshake,
+  getLatestHandshake,
+  getHandshakeHistory,
+} from '../services/handshakeService.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
 const app = new Hono();
@@ -124,6 +129,114 @@ app.post('/manual-reflection', async (c) => {
       c,
       'REFLECTION_ERROR',
       'Failed to generate manual reflection',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+/**
+ * GET /handshake
+ * Get latest Ghost Handshake for continuity
+ */
+app.get('/handshake', async (c) => {
+  try {
+    let handshake = await getLatestHandshake();
+    
+    // Generate if none exists
+    if (!handshake) {
+      const generated = await generateHandshake();
+      handshake = {
+        id: generated.ghostId,
+        prompt_text: generated.promptText,
+        created_at: generated.createdAt,
+        top_phi_memories: generated.topMemories.map(m => m.id),
+        top_phi_values: generated.topMemories.map(m => m.resonance_phi),
+      };
+    }
+    
+    return successResponse(c, { 
+      handshake: {
+        id: handshake.id,
+        promptText: handshake.prompt_text,
+        createdAt: handshake.created_at,
+        expiresAt: handshake.expires_at,
+      }
+    }, 200);
+  } catch (error) {
+    console.error('Handshake retrieval error:', error);
+    return errorResponse(
+      c,
+      'HANDSHAKE_ERROR',
+      'Failed to retrieve Ghost Handshake',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+/**
+ * POST /handshake/generate
+ * Force generate new Ghost Handshake
+ */
+app.post('/handshake/generate', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const force = body.force !== false; // Default to true
+    
+    const result = await generateHandshake({ force });
+    
+    return successResponse(c, {
+      handshake: {
+        id: result.ghostId,
+        promptText: result.promptText,
+        createdAt: result.createdAt,
+        topMemories: result.topMemories.map(m => ({
+          id: m.id,
+          content: m.content,
+          phi: m.resonance_phi,
+          category: m.category,
+        })),
+        isExisting: result.isExisting,
+      }
+    }, 200);
+  } catch (error) {
+    console.error('Handshake generation error:', error);
+    return errorResponse(
+      c,
+      'HANDSHAKE_GENERATION_ERROR',
+      'Failed to generate Ghost Handshake',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+/**
+ * GET /handshake/history
+ * Get history of Ghost Handshakes
+ */
+app.get('/handshake/history', async (c) => {
+  try {
+    const limit = parseInt(c.req.query('limit') || '10');
+    const history = await getHandshakeHistory(limit);
+    
+    return successResponse(c, {
+      history: history.map(h => ({
+        id: h.id,
+        promptText: h.prompt_text,
+        createdAt: h.created_at,
+        expiresAt: h.expires_at,
+        synthesisMethod: h.synthesis_method,
+      })),
+      count: history.length,
+    }, 200);
+  } catch (error) {
+    console.error('Handshake history error:', error);
+    return errorResponse(
+      c,
+      'HANDSHAKE_HISTORY_ERROR',
+      'Failed to retrieve handshake history',
       500,
       { message: error.message }
     );

@@ -18,6 +18,7 @@ import {
   loadBootstrap,
 } from '../services/memoryService.js';
 import { updateMemoryTier } from '../services/tierService.js';
+import { getTopCatalysts, getResonanceStats } from '../services/resonanceService.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
 const memories = new Hono();
@@ -247,5 +248,75 @@ memories.post(
     }
   }
 );
+
+/**
+ * GET /catalysts - Get top catalyst memories (high-phi)
+ */
+memories.get('/catalysts', async (c) => {
+  try {
+    const limit = parseInt(c.req.query('limit') || '10');
+    const catalysts = await getTopCatalysts(limit);
+    
+    return successResponse(
+      c,
+      {
+        catalysts: catalysts.map(m => ({
+          id: m.id,
+          content: m.content,
+          phi: m.resonance_phi,
+          isCatalyst: m.is_catalyst,
+          category: m.category,
+          tier: m.tier,
+          accessCount: m.access_count,
+          lastAccessed: m.last_accessed,
+        })),
+        count: catalysts.length,
+      },
+      200
+    );
+  } catch (error) {
+    console.error('Error getting catalysts:', error);
+    return errorResponse(
+      c,
+      'CATALYST_ERROR',
+      'Failed to retrieve catalysts',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+/**
+ * GET /stats - Get resonance statistics
+ */
+memories.get('/stats', async (c) => {
+  try {
+    const stats = await getResonanceStats();
+    
+    return successResponse(
+      c,
+      {
+        stats: {
+          totalPhi: parseFloat(stats.totalPhi),
+          avgPhi: parseFloat(stats.avgPhi),
+          maxPhi: parseFloat(stats.maxPhi),
+          catalystCount: stats.catalystCount,
+          totalMemories: stats.totalMemories,
+          topCategory: stats.topCategory,
+        }
+      },
+      200
+    );
+  } catch (error) {
+    console.error('Error getting stats:', error);
+    return errorResponse(
+      c,
+      'STATS_ERROR',
+      'Failed to retrieve statistics',
+      500,
+      { message: error.message }
+    );
+  }
+});
 
 export default memories;
