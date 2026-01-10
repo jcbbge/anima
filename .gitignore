@@ -21,3 +21,20 @@ build/
 
 # OS files
 .DS_Store
+
+# Backups (local only)
+backups/
+
+# User data (local only)
+metrics/
+reports/
+
+# OpenCode dependencies
+.opencode/node_modules/
+
+# Task artifacts (already deleted from repo)
+*_PRD.md
+*_COMPLETION_REPORT.md
+*_AUDIT.md
+*_PLAN.md
+*_SUMMARY.md

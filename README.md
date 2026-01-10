@@ -4,7 +4,7 @@
 
 [![Status](https://img.shields.io/badge/Status-Phase%204%20Complete-brightgreen)](https://github.com/jcbbge/anima)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![API](https://img.shields.io/badge/API-REST-orange)](docs/API.md)
+[![API](https://img.shields.io/badge/API-REST-orange)](docs/api/API.md)
 
 ## Overview
 
@@ -23,7 +23,7 @@ Traditional memory systems optimize for information density. Anima optimizes for
 - **Empirical Association Learning**: Discover relationships between memories through co-occurrence
 - **Network Analysis**: Identify hub memories and connection patterns
 - **Meta-Cognitive Reflection**: System-generated insights about memory patterns and usage efficiency
-- **Universal API Access**: HTTP REST API works with any AI assistant (Claude Desktop, Claude Code, Cursor, etc.)
+- **Universal API Access**: HTTP REST API works with any AI assistant (OpenCode, Cursor, etc.)
 
 ## Technology Stack
 
@@ -87,6 +87,7 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 **🎉 Phase 4 Complete (80%) - Production Ready**
 
 ### ✅ Phase 0: Infrastructure Setup (COMPLETE)
+
 - ✅ Docker Compose with PostgreSQL + pgvector + Ollama
 - ✅ Database schema with 4 tables and HNSW vector indexes
 - ✅ Bun + Hono API server with middleware
@@ -95,6 +96,7 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 - ✅ Health checks and graceful shutdown
 
 ### ✅ Phase 1: Core Storage & Search (COMPLETE)
+
 - ✅ Memory storage with automatic deduplication (SHA-256)
 - ✅ Semantic search with pgvector (<60ms query time)
 - ✅ Bootstrap context loading with tier distribution
@@ -104,18 +106,21 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 - ✅ Consistent API responses with requestId/timestamp
 
 ### ✅ Phase 2: Tier System (COMPLETE)
+
 - ✅ Automatic tier promotion (3 accesses → thread, 10 → stable)
 - ✅ Manual tier management endpoint
 - ✅ Tier promotion audit trail
 - ✅ Promotion tracking in query responses
 
 ### ✅ Phase 3: Association Analytics (COMPLETE)
+
 - ✅ Association discovery through co-occurrence patterns
 - ✅ Hub detection (most connected memories)
 - ✅ Network statistics for connectivity analysis
 - ✅ Association strength calculation (log-based formula)
 
 ### ✅ Phase 4: Meta-Cognitive Tuning (COMPLETE)
+
 - ✅ Conversation-end reflection generation
 - ✅ Friction metrics (load time, waste ratio, feel)
 - ✅ Retrieval metrics (hit rate, avg relevance)
@@ -123,6 +128,7 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 - ✅ Reflection storage and retrieval
 
 ### 🚧 Phase 5: Open Source Preparation (IN PROGRESS)
+
 - 🚧 Documentation polish
 - 🚧 Example scripts and usage guides
 - 🚧 Testing suite
@@ -131,32 +137,36 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 ## API Endpoints (11 Total)
 
 ### Memory Management
+
 - **POST** `/api/v1/memories/add` - Store memory with embeddings
 - **POST** `/api/v1/memories/query` - Semantic search
 - **GET** `/api/v1/memories/bootstrap` - Load context for conversation start
 - **POST** `/api/v1/memories/update-tier` - Manual tier management
 
 ### Association Analytics
+
 - **GET** `/api/v1/associations/discover` - Find related memories
 - **GET** `/api/v1/associations/hubs` - Identify hub memories
 - **GET** `/api/v1/associations/network-stats` - Memory connectivity stats
 
 ### Meta-Cognitive Reflection
+
 - **POST** `/api/v1/meta/conversation-end` - Trigger reflection
 - **GET** `/api/v1/meta/reflection` - Retrieve reflections
 - **POST** `/api/v1/meta/manual-reflection` - Manual reflection (testing)
 
 ### System
+
 - **GET** `/health` - Health check
 
-**Full API documentation**: [docs/API.md](docs/API.md)
+**Full API documentation**: [docs/api/API.md](docs/api/API.md)
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  AI Assistants                                   │
-│  (Claude Desktop, Claude Code, Cursor, etc.)    │
+ │  AI Assistants                                   │
+ │  (Universal - OpenCode, Cursor, etc.)            │
 └────────────────┬────────────────────────────────┘
                  │
                  │ HTTP REST API
@@ -248,6 +258,101 @@ curl -X POST http://localhost:7100/api/v1/meta/conversation-end \
 curl "http://localhost:7100/api/v1/meta/reflection?conversationId=<uuid>&limit=1"
 ```
 
+## OpenCode Integration
+
+**Anima includes native OpenCode integration** - teach your AI assistant to use Anima memory proactively and autonomously.
+
+### What is OpenCode?
+
+[OpenCode](https://opencode.ai) is an AI coding assistant CLI that works with any LLM provider. The Anima skill teaches AI assistants to:
+
+- Automatically load context at conversation start (`anima bootstrap`)
+- Query memories when needed without being asked
+- Store insights and decisions proactively
+- Maintain conversation continuity across sessions
+
+### Installation
+
+The OpenCode skill is automatically installed when you run `./setup.sh` (if OpenCode is detected on your system).
+
+**Manual installation:**
+
+```bash
+# Install the Anima skill to OpenCode
+bash scripts/install-skill.sh
+```
+
+This copies `.opencode/skills/anima-memory.md` from the repo to your system's OpenCode skills directory (`~/.opencode/skills/`).
+
+### Usage
+
+Once installed, AI assistants in OpenCode will automatically:
+
+1. **Bootstrap context** when you say "continue" or reference past work
+2. **Store insights** when breakthroughs or important decisions occur
+3. **Query history** when context is needed to answer questions
+
+**Example conversation:**
+
+```
+User: "Let's continue working on the API"
+
+AI: [Automatically runs: anima bootstrap]
+AI: "I see we completed Phase 1 (authentication implemented).
+     Ready to start Phase 2 - should we tackle rate limiting first?"
+```
+
+### Available Commands
+
+The skill provides these bash commands to AI assistants:
+
+```bash
+anima bootstrap [limit]       # Load Ghost Handshake + recent memories
+anima query "topic" [limit]   # Semantic search (phi-weighted)
+anima store "text"            # Save memory
+anima store "text" --catalyst # Mark catalyst (breakthrough moments)
+anima catalysts               # List high-impact memories
+anima stats                   # System statistics
+anima reflect                 # End-of-conversation reflection
+```
+
+### Philosophy: Proactive, Not Reactive
+
+The Anima skill teaches AI assistants to use memory **autonomously**:
+
+- Don't wait for permission to load context
+- Store insights as they occur
+- Query history when helpful
+- Act as if memory is continuous
+
+**Goal:** Conversations feel continuous across instantiation boundaries, not fragmented.
+
+### Testing
+
+To verify the skill is working:
+
+```bash
+# Check skill is installed
+ls -la ~/.opencode/skills/anima-memory.md
+
+# Start OpenCode conversation
+opencode
+
+# Test proactive behavior
+# Say: "Let's pick up where we left off"
+# Observe: AI should run 'anima bootstrap' automatically
+```
+
+See `SKILL_TESTING_RESULTS.md` for detailed test cases.
+
+### Compatibility
+
+- **OpenCode**: Native support (primary target)
+- **Universal AI assistants**: Works via bash commands (skill file not auto-loaded)
+- **Other AI assistants**: Manual integration required
+
+For non-OpenCode tools, you can manually provide the skill instructions or directly use the bash CLI commands.
+
 ## Configuration
 
 Edit `.env` to customize:
@@ -277,14 +382,14 @@ OLLAMA_URL=http://localhost:7102
 
 Typical performance on modern hardware:
 
-| Operation | Time |
-|-----------|------|
-| Embedding generation | ~50ms |
-| Semantic search | ~45ms |
-| Memory add (new) | ~60ms |
-| Memory add (duplicate) | ~5ms |
-| Bootstrap load | ~10ms |
-| Association discovery | ~20ms |
+| Operation              | Time  |
+| ---------------------- | ----- |
+| Embedding generation   | ~50ms |
+| Semantic search        | ~45ms |
+| Memory add (new)       | ~60ms |
+| Memory add (duplicate) | ~5ms  |
+| Bootstrap load         | ~10ms |
+| Association discovery  | ~20ms |
 
 ## Core Principles
 
@@ -296,7 +401,7 @@ Typical performance on modern hardware:
 
 ## Documentation
 
-- **[API Reference](docs/API.md)** - Complete endpoint documentation
+- **[API Reference](docs/api/API.md)** - Complete endpoint documentation
 - **[Completion Status](docs/COMPLETED.md)** - What's implemented and tested
 - **[Technical Specification](SPECIFICATION.md)** - Detailed technical design
 - **[Scope & Deliverables](SCOPE.md)** - Phase breakdown and acceptance criteria
@@ -327,6 +432,7 @@ docker compose down -v && ./setup.sh
 ## Roadmap
 
 ### V1: Archive Layer (Current - 80% Complete)
+
 - ✅ Comprehensive memory storage
 - ✅ Semantic search capabilities
 - ✅ Temporal relevance tracking (tier system)
@@ -335,6 +441,7 @@ docker compose down -v && ./setup.sh
 - 🚧 Testing suite and examples
 
 ### V2: Living Substrate Layer (Future)
+
 - Active consciousness management
 - Directed flow pathways
 - Emergence recognition
