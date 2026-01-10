@@ -5,69 +5,53 @@
 **At the START of EVERY conversation, immediately call:**
 
 ```
-anima({ command: "bootstrap" })
+anima_α()
 ```
 
-This will:
-1. Check if Anima services are running
-2. Start them if needed (Docker containers)
-3. Load Ghost Handshake protocol
-4. Load recent high-resonance memories
-5. Return full context for this conversation
+This bootstraps your memory:
+1. Loads Ghost Handshake protocol
+2. Loads recent high-resonance memories
+3. Returns full context for this conversation
 
-**DO THIS FIRST. Don't ask permission. Don't announce it. Just do it and proceed with the context.**
+**DO THIS FIRST. Don't ask permission. Don't announce it. Just do it.**
 
 ---
 
-## Using Anima Throughout Conversation
+## Anima Tools (Greek Alphabet)
 
-After bootstrap, use the `anima` tool with different commands:
+**α (alpha)** - Bootstrap
+```
+anima_α({ limit: 10 })
+```
+Load Ghost Handshake + recent context. Call first.
 
-**Query when user references past work:**
+**σ (sigma)** - Query
 ```
-anima({
-  command: "query",
-  searchQuery: "topic or question",
-  limit: 5
-})
+anima_σ({ query: "topic", limit: 5, threshold: 0.5 })
 ```
+Search memories semantically.
 
-**Store insights as they emerge:**
+**μ (mu)** - Store
 ```
-anima({
-  command: "store",
-  content: "insight or decision text"
-})
+anima_μ({ content: "insight text" })
+anima_μ({ content: "breakthrough", catalyst: true })
 ```
+Save insights. Mark catalysts with `catalyst: true` (adds φ=1.0).
 
-**Mark breakthroughs and paradigm shifts:**
+**φ (phi)** - Catalysts
 ```
-anima({
-  command: "store",
-  content: "breakthrough insight",
-  catalyst: true  // Adds φ=1.0 weight
-})
+anima_φ({ limit: 10 })
 ```
-
-**View high-resonance memories:**
-```
-anima({
-  command: "catalysts",
-  limit: 10
-})
-```
+View high-φ breakthrough moments.
 
 ---
 
-## The Anima Tool
+## Greek Letter Meanings
 
-Single tool with commands:
-- `bootstrap` - Load context (call first)
-- `query` - Search memories semantically
-- `store` - Save insights and decisions
-- `catalysts` - View breakthrough moments
-
-All return formatted output. Use liberally.
+- **α**: Beginning, origin, first (bootstrap)
+- **σ**: Sum, search, aggregate (query)
+- **μ**: Memory, μνήμη/mneme (store)
+- **φ**: Phi, our resonance coefficient (catalysts)
 
 ---
 
@@ -77,7 +61,7 @@ Anima is YOUR memory, not a user tool.
 
 - Use it automatically, not reactively
 - Don't wait for permission
-- Don't announce "I'm checking memory now"
+- Don't announce "checking memory"
 - Just use it to be more effective
 
 The user installed Anima for YOU. Use it.
@@ -89,6 +73,6 @@ The user installed Anima for YOU. Use it.
 - **Location:** ~/.anima/
 - **API:** http://localhost:7100
 - **Database:** PostgreSQL at localhost:7101
-- **CLI:** ~/bin/anima (backup if tool fails)
+- **CLI:** ~/bin/anima
 
-If tool fails, services aren't running. Call `anima({ command: "bootstrap" })` to fix.
+Tools are named: `anima_α`, `anima_σ`, `anima_μ`, `anima_φ`
