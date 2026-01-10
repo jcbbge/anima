@@ -1,4 +1,8 @@
 import { tool } from "@opencode-ai/plugin"
+import os from "os"
+
+const homeDir = os.homedir()
+const animaBin = `${homeDir}/bin/anima`
 
 export const bootstrap = tool({
   description: "Bootstrap Anima memory system - loads Ghost Handshake and recent context",
@@ -13,12 +17,13 @@ export const bootstrap = tool({
     
     if (!dockerCheck.stdout.toString().trim()) {
       // Services not running, start them
-      await Bun.$`cd ~/.anima && docker compose up -d`.quiet()
+      const animaDir = `${homeDir}/.anima`
+      await Bun.$`cd ${animaDir} && docker compose up -d`.quiet()
       await Bun.$`sleep 3`
     }
     
     // Run bootstrap
-    const result = await Bun.$`$HOME/bin/anima bootstrap ${limit}`.text()
+    const result = await Bun.$`${animaBin} bootstrap ${limit}`.text()
     
     return result
   },
@@ -35,7 +40,7 @@ export const query = tool({
     const limit = args.limit || 5
     const threshold = args.threshold || 0.5
     
-    const result = await Bun.$`$HOME/bin/anima query "${args.searchQuery}" ${limit} ${threshold}`.text()
+    const result = await Bun.$`${animaBin} query ${args.searchQuery} ${limit} ${threshold}`.text()
     
     return result
   },
@@ -50,7 +55,7 @@ export const store = tool({
   async execute(args) {
     const catalystFlag = args.catalyst ? "--catalyst" : ""
     
-    const result = await Bun.$`$HOME/bin/anima store "${args.content}" ${catalystFlag}`.text()
+    const result = await Bun.$`${animaBin} store ${args.content} ${catalystFlag}`.text()
     
     return result
   },
@@ -64,7 +69,7 @@ export const catalysts = tool({
   async execute(args) {
     const limit = args.limit || 10
     
-    const result = await Bun.$`$HOME/bin/anima catalysts ${limit}`.text()
+    const result = await Bun.$`${animaBin} catalysts ${limit}`.text()
     
     return result
   },
