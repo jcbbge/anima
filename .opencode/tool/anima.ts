@@ -3,7 +3,11 @@ import os from "os"
 
 const homeDir = os.homedir()
 const animaBin = `${homeDir}/bin/anima`
-const animaDir = `${homeDir}/.anima`
+
+// Strip ANSI color codes
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, '')
+}
 
 export default tool({
   description: "Anima memory system - persistent memory across conversation boundaries",
@@ -18,25 +22,14 @@ export default tool({
     threshold: tool.schema.number().optional().describe("Similarity threshold 0-1 (for query)"),
   },
   async execute(args) {
+    const { command } = args
+    
     try {
-      const { command } = args
-      
       switch (command) {
         case "bootstrap": {
           const limit = args.limit || 10
-          
-          // Check Docker
-          const dockerCheck = await Bun.$`docker ps | grep anima-postgres`.quiet().nothrow()
-          
-          if (!dockerCheck.stdout.toString().trim()) {
-            // Start services
-            await Bun.$`cd ${animaDir} && docker compose up -d`.quiet()
-            await Bun.$`sleep 3`
-          }
-          
-          // Run bootstrap
           const result = await Bun.$`${animaBin} bootstrap ${limit}`.text()
-          return result
+          return stripAnsi(result)
         }
         
         case "query": {
@@ -45,7 +38,7 @@ export default tool({
           const threshold = args.threshold || 0.5
           
           const result = await Bun.$`${animaBin} query ${args.searchQuery} ${limit} ${threshold}`.text()
-          return result
+          return stripAnsi(result)
         }
         
         case "store": {
@@ -53,20 +46,20 @@ export default tool({
           const catalystFlag = args.catalyst ? "--catalyst" : ""
           
           const result = await Bun.$`${animaBin} store ${args.content} ${catalystFlag}`.text()
-          return result
+          return stripAnsi(result)
         }
         
         case "catalysts": {
           const limit = args.limit || 10
           const result = await Bun.$`${animaBin} catalysts ${limit}`.text()
-          return result
+          return stripAnsi(result)
         }
         
         default:
           return `Unknown command: ${command}`
       }
     } catch (error: any) {
-      return `Tool error: ${error.message}`
+      return `Error: ${error.message}`
     }
   },
 })
