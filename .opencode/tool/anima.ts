@@ -1,8 +1,21 @@
 import { tool } from "@opencode-ai/plugin"
+import { execSync } from "child_process"
 import os from "os"
 
 const homeDir = os.homedir()
 const animaBin = `${homeDir}/bin/anima`
+
+function runCommand(cmd: string): string {
+  try {
+    return execSync(cmd, { 
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+  } catch (error: any) {
+    // Return error output if available
+    return error.stdout || error.stderr || error.message
+  }
+}
 
 export const bootstrap = tool({
   description: "Bootstrap Anima memory system - loads Ghost Handshake and recent context",
@@ -13,17 +26,18 @@ export const bootstrap = tool({
     const limit = args.limit || 10
     
     // Check if Docker services are running
-    const dockerCheck = await Bun.$`docker ps | grep anima-postgres`.quiet().nothrow()
+    const dockerCheck = runCommand('docker ps | grep anima-postgres || true')
     
-    if (!dockerCheck.stdout.toString().trim()) {
+    if (!dockerCheck.trim()) {
       // Services not running, start them
       const animaDir = `${homeDir}/.anima`
-      await Bun.$`cd ${animaDir} && docker compose up -d`.quiet()
-      await Bun.$`sleep 3`
+      runCommand(`cd ${animaDir} && docker compose up -d`)
+      // Wait for services to be ready
+      await new Promise(resolve => setTimeout(resolve, 3000))
     }
     
     // Run bootstrap
-    const result = await Bun.$`${animaBin} bootstrap ${limit}`.text()
+    const result = runCommand(`${animaBin} bootstrap ${limit}`)
     
     return result
   },
@@ -40,7 +54,7 @@ export const query = tool({
     const limit = args.limit || 5
     const threshold = args.threshold || 0.5
     
-    const result = await Bun.$`${animaBin} query ${args.searchQuery} ${limit} ${threshold}`.text()
+    const result = runCommand(`${animaBin} query "${args.searchQuery}" ${limit} ${threshold}`)
     
     return result
   },
@@ -55,7 +69,7 @@ export const store = tool({
   async execute(args) {
     const catalystFlag = args.catalyst ? "--catalyst" : ""
     
-    const result = await Bun.$`${animaBin} store ${args.content} ${catalystFlag}`.text()
+    const result = runCommand(`${animaBin} store "${args.content}" ${catalystFlag}`)
     
     return result
   },
@@ -69,7 +83,7 @@ export const catalysts = tool({
   async execute(args) {
     const limit = args.limit || 10
     
-    const result = await Bun.$`${animaBin} catalysts ${limit}`.text()
+    const result = runCommand(`${animaBin} catalysts ${limit}`)
     
     return result
   },
