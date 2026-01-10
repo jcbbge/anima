@@ -86,11 +86,11 @@ fi
 echo ""
 echo "🎯 Installing OpenCode integration..."
 
-# 1. Custom tool (auto-bootstrap)
-echo "   Installing anima_bootstrap tool..."
+# 1. Custom tools (bootstrap, query, store, catalysts)
+echo "   Installing Anima tools..."
 mkdir -p ~/.config/opencode/tool
-cp "$ANIMA_DIR/.opencode/tool/anima-bootstrap.ts" ~/.config/opencode/tool/
-echo "   ✅ Tool installed"
+cp "$ANIMA_DIR/.opencode/tool/anima.ts" ~/.config/opencode/tool/
+echo "   ✅ Tools installed (anima_bootstrap, anima_query, anima_store, anima_catalysts)"
 
 # 2. Global AGENTS.md (if doesn't exist, create it; if exists, append)
 echo "   Configuring global AGENTS.md..."
@@ -140,7 +140,8 @@ echo "✨ Anima installed successfully!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "🎯 Integration installed:"
-echo "   • Custom tool: ~/.config/opencode/tool/anima-bootstrap.ts"
+echo "   • Custom tools: ~/.config/opencode/tool/anima.ts"
+echo "     - anima_bootstrap, anima_query, anima_store, anima_catalysts"
 echo "   • Global rules: ~/.config/opencode/AGENTS.md"
 echo "   • Skill reference: ~/.config/opencode/skill/anima/SKILL.md"
 echo ""
