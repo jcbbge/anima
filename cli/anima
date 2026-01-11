@@ -178,9 +178,17 @@ EOF
             exit 1
         else
             # Ask user
-            read -p "Would you like me to start it for you? (y/n): " -n 1 -r
-            echo ""
-            
+            if [ -t 0 ]; then
+                # Interactive terminal
+                read -p "Would you like me to start it for you? (y/n): " -n 1 -r
+                echo ""
+            else
+                # Non-interactive (piped input), default to no
+                REPLY="n"
+                echo ""
+                echo "Would you like me to start it for you? (y/n): n (non-interactive)"
+            fi
+
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 if ! start_docker_desktop; then
                     exit 1
