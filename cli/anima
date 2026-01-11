@@ -19,7 +19,7 @@ if [ -f "$ANIMA_DIR/.env" ]; then
     source "$ANIMA_DIR/.env"
 fi
 
-AUTO_START_DOCKER="${AUTO_START_DOCKER:-ask}"  # Options: true, false, ask
+AUTO_START_DOCKER="${AUTO_START_DOCKER:-true}"  # Options: true, false, ask (default: true for frictionless)
 
 # Colors
 GHOST_COLOR="\033[1;35m"      # Magenta for Ghost Handshake

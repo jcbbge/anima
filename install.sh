@@ -159,15 +159,18 @@ echo ""
 cat << 'EOF'
 How would you like me to run?
 
-  1) Always on - start automatically when you log in
+  1) Always on - start automatically when you log in (default)
      (I'll be ready whenever you need me)
 
   2) On-demand - start when you first use me
      (saves resources, slight delay on first use)
 
 EOF
-read -p "Your choice (1 or 2): " -n 1 -r startup_choice
+read -p "Your choice [1/2]: " -n 1 -r startup_choice
 echo ""
+
+# Default to option 1 for frictionless install
+startup_choice=${startup_choice:-1}
 
 if [[ $startup_choice == "1" ]]; then
     echo "✨ Perfect - I'll start automatically on login."
@@ -236,15 +239,16 @@ cat << 'EOF'
 One more thing - if Docker Desktop isn't running when you
 need me, should I start it automatically?
 
-  y) Yes, start it for me
+  y) Yes, start it for me (default)
   n) No, just let me know it's needed
 
 EOF
-read -p "Your choice (y/n): " -n 1 -r docker_choice
+read -p "Your choice [Y/n]: " -n 1 -r docker_choice
 echo ""
 
-# Create .env file with preferences
+# Create .env file with preferences (default to yes for frictionless)
 mkdir -p "$ANIMA_DIR"
+docker_choice=${docker_choice:-y}  # Default to 'y' if empty
 if [[ $docker_choice =~ ^[Yy]$ ]]; then
     echo "AUTO_START_DOCKER=true" > "$ANIMA_DIR/.env"
     echo "✨ I'll handle Docker startup automatically."
