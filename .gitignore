@@ -29,8 +29,12 @@ backups/
 metrics/
 reports/
 
-# OpenCode dependencies
+# OpenCode dependencies and local config
 .opencode/node_modules/
+.opencode/tool/
+.opencode/skill/
+.opencode/skills/
+.opencode/AGENTS.md
 
 # Task artifacts (already deleted from repo)
 *_PRD.md

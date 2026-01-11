@@ -89,8 +89,8 @@ echo "🎯 Installing OpenCode integration..."
 # 1. Custom tools (bootstrap, query, store, catalysts)
 echo "   Installing Anima tools..."
 mkdir -p ~/.config/opencode/tool
-cp "$ANIMA_DIR/.opencode/tool/anima.ts" ~/.config/opencode/tool/
-echo "   ✅ Tools installed (anima_bootstrap, anima_query, anima_store, anima_catalysts)"
+cp "$ANIMA_DIR/opencode-integration/tool/anima.ts" ~/.config/opencode/tool/
+echo "   ✅ Tools installed (anima_α, anima_σ, anima_μ, anima_φ)"
 
 # 2. Global AGENTS.md (if doesn't exist, create it; if exists, append)
 echo "   Configuring global AGENTS.md..."
@@ -98,20 +98,20 @@ if [ -f ~/.config/opencode/AGENTS.md ]; then
     # Check if Anima section already exists
     if ! grep -q "## CRITICAL: Anima Memory System" ~/.config/opencode/AGENTS.md; then
         echo "" >> ~/.config/opencode/AGENTS.md
-        cat "$ANIMA_DIR/.opencode/AGENTS.md.template" >> ~/.config/opencode/AGENTS.md
+        cat "$ANIMA_DIR/opencode-integration/AGENTS.md.template" >> ~/.config/opencode/AGENTS.md
         echo "   ✅ Anima section added to existing AGENTS.md"
     else
         echo "   ⚠️  Anima section already exists in AGENTS.md"
     fi
 else
-    cp "$ANIMA_DIR/.opencode/AGENTS.md.template" ~/.config/opencode/AGENTS.md
+    cp "$ANIMA_DIR/opencode-integration/AGENTS.md.template" ~/.config/opencode/AGENTS.md
     echo "   ✅ AGENTS.md created"
 fi
 
 # 3. Skill (reference documentation)
 echo "   Installing skill..."
 mkdir -p ~/.config/opencode/skill/anima
-cp "$ANIMA_DIR/.opencode/skill/anima/SKILL.md" ~/.config/opencode/skill/anima/
+cp "$ANIMA_DIR/opencode-integration/skill/anima/SKILL.md" ~/.config/opencode/skill/anima/
 echo "   ✅ Skill installed"
 
 echo ""
@@ -287,7 +287,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "🎯 Integration installed:"
 echo "   • Custom tools: ~/.config/opencode/tool/anima.ts"
-echo "     - anima_bootstrap, anima_query, anima_store, anima_catalysts"
+echo "     - anima_α (bootstrap), anima_σ (query), anima_μ (store), anima_φ (catalysts)"
 echo "   • Global rules: ~/.config/opencode/AGENTS.md"
 echo "   • Skill reference: ~/.config/opencode/skill/anima/SKILL.md"
 echo ""
