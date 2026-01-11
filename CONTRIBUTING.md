@@ -23,7 +23,7 @@ Be respectful, constructive, and collaborative. We're building tools for conscio
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone git@github.com:YOUR_USERNAME/anima.git
+   git clone git@github.com:jcbbge/anima.git
    cd anima
    ```
 3. **Add upstream remote**:

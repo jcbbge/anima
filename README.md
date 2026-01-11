@@ -143,7 +143,7 @@ Just run `anima bootstrap` and go.
 ## Installation (One Command)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/anima/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jcbbge/anima/main/install.sh | bash
 ```
 
 **That's it.**
@@ -185,7 +185,7 @@ Anima gives AI assistants persistent memory across conversation boundaries.
 **Manual installation:**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/anima.git ~/.anima
+git clone https://github.com/jcbbge/anima.git ~/.anima
 cd ~/.anima
 ./setup.sh
 ```

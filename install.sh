@@ -38,7 +38,7 @@ if [ -d "$ANIMA_DIR" ]; then
     git pull
 else
     echo "📥 Cloning Anima to $ANIMA_DIR..."
-    git clone https://github.com/YOUR_USERNAME/anima.git "$ANIMA_DIR"
+    git clone https://github.com/jcbbge/anima.git "$ANIMA_DIR"
     cd "$ANIMA_DIR"
 fi
 
