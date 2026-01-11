@@ -30,7 +30,7 @@ const DEFAULTS = {
   EMBEDDING_PROVIDER: 'ollama',
   OLLAMA_URL: 'http://localhost:7102',
   LOG_LEVEL: 'info',
-  ENABLE_SEMANTIC_CONSOLIDATION: 'false',
+  ENABLE_SEMANTIC_CONSOLIDATION: 'true',
 };
 
 /**
