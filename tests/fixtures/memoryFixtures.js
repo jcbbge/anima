@@ -317,6 +317,14 @@ export const clusterFixture = (() => {
   };
 })();
 
+// Export helper functions
+export {
+  generateHash,
+  createNormalizedVector,
+  createPatternVector,
+  createVectorsWithSimilarity,
+};
+
 export default {
   exactDuplicateFixture,
   veryHighSimilarityFixture,

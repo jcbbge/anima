@@ -262,12 +262,12 @@ export function createSemanticConsolidationService(options = {}) {
     const avgPhi = totalPhi / embeddings.length;
 
     let closestMemory = null;
-    let minDistance = Infinity;
+    let maxSimilarity = -Infinity;
 
     for (const emb of embeddings) {
-      const dist = cosineSimilarity(emb.vector, centroid);
-      if (dist < minDistance) {
-        minDistance = dist;
+      const similarity = cosineSimilarity(emb.vector, centroid);
+      if (similarity > maxSimilarity) {
+        maxSimilarity = similarity;
         closestMemory = emb;
       }
     }

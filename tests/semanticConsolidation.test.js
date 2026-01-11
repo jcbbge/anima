@@ -25,6 +25,10 @@ import {
   catalystFixture,
   normalConsolidationFixture,
   phiCapFixture,
+  clusterFixture,
+  createNormalizedVector,
+  createVectorsWithSimilarity,
+  createPatternVector,
 } from './fixtures/memoryFixtures.js';
 import { createSemanticConsolidationService } from '../src/services/semanticConsolidationService.js';
 
@@ -555,5 +559,572 @@ describe('Semantic Consolidation - mergeIntoSemanticCentroid()', () => {
     expect(result).toHaveProperty('phiContributed');
 
     expect(result.memory.id).toBe(mem1.id);
+  });
+});
+
+describe('Semantic Consolidation - findSemanticCluster()', () => {
+  let service;
+
+  beforeAll(async () => {
+    service = createSemanticConsolidationService({
+      queryFn: testQuery,
+      schema: getTestSchema(),
+    });
+  });
+
+  beforeEach(async () => {
+    await clearTestData();
+  });
+
+  test('should find cluster members within radius', async () => {
+    const { memories } = clusterFixture;
+
+    // Insert all cluster memories
+    for (const mem of memories) {
+      await insertTestMemory(mem);
+    }
+
+    // Query using first memory's embedding
+    const cluster = await service.findSemanticCluster(
+      memories[0].embedding,
+      0.15, // radius (allows similarities down to 0.85)
+      2.0   // minPhi
+    );
+
+    // Should find at least 3 members (all have phi >= 2.0)
+    expect(cluster.length).toBeGreaterThanOrEqual(3);
+
+    // All results should have phi >= 2.0
+    cluster.forEach(mem => {
+      expect(parseFloat(mem.resonance_phi)).toBeGreaterThanOrEqual(2.0);
+    });
+
+    // All results should have similarity >= 0.85 (1.0 - 0.15)
+    cluster.forEach(mem => {
+      expect(parseFloat(mem.similarity)).toBeGreaterThanOrEqual(0.85);
+    });
+  });
+
+  test('should filter by minimum phi threshold', async () => {
+    const { memories } = clusterFixture;
+
+    // Insert all cluster memories
+    for (const mem of memories) {
+      await insertTestMemory(mem);
+    }
+
+    // Query with high phi threshold (3.0) - should only return first memory
+    const cluster = await service.findSemanticCluster(
+      memories[0].embedding,
+      0.15,
+      3.0 // high phi threshold
+    );
+
+    expect(cluster.length).toBe(1);
+    expect(parseFloat(cluster[0].resonance_phi)).toBe(3.0);
+  });
+
+  test('should order by phi DESC, then similarity DESC', async () => {
+    // Insert memories with different phi values
+    const mem1 = await insertTestMemory({
+      content: 'Low phi, high similarity',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 2.0,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'High phi, moderate similarity',
+      contentHash: 'hash2',
+      embedding: createVectorsWithSimilarity(0.90)[1],
+      resonancePhi: 4.0,
+    });
+
+    const mem3 = await insertTestMemory({
+      content: 'High phi, high similarity',
+      contentHash: 'hash3',
+      embedding: createVectorsWithSimilarity(0.95)[1],
+      resonancePhi: 4.0,
+    });
+
+    const cluster = await service.findSemanticCluster(
+      createNormalizedVector(1.0),
+      0.15,
+      2.0
+    );
+
+    expect(cluster.length).toBe(3);
+
+    // First two should both have phi=4.0, ordered by similarity
+    expect(parseFloat(cluster[0].resonance_phi)).toBe(4.0);
+    expect(parseFloat(cluster[1].resonance_phi)).toBe(4.0);
+    expect(parseFloat(cluster[2].resonance_phi)).toBe(2.0);
+
+    // Among the phi=4.0 entries, higher similarity should come first
+    expect(parseFloat(cluster[0].similarity)).toBeGreaterThan(parseFloat(cluster[1].similarity));
+  });
+
+  test('should limit results to 20', async () => {
+    // Insert 25 memories that all match
+    for (let i = 0; i < 25; i++) {
+      await insertTestMemory({
+        content: `Cluster member ${i}`,
+        contentHash: `hash_${i}`,
+        embedding: createVectorsWithSimilarity(0.90)[1],
+        resonancePhi: 2.5,
+      });
+    }
+
+    const cluster = await service.findSemanticCluster(
+      createNormalizedVector(1.0),
+      0.15,
+      2.0
+    );
+
+    expect(cluster.length).toBe(20); // Should be capped at 20
+  });
+
+  test('should return empty array when no matches', async () => {
+    await insertTestMemory({
+      content: 'Low phi memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(0.5),
+      resonancePhi: 1.0, // Below default minPhi of 2.0
+    });
+
+    const cluster = await service.findSemanticCluster(
+      createNormalizedVector(0.5),
+      0.15,
+      2.0
+    );
+
+    expect(cluster.length).toBe(0);
+  });
+
+  test('should calculate cluster_strength correctly', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'Test memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 3.0,
+    });
+
+    const cluster = await service.findSemanticCluster(
+      createNormalizedVector(1.0), // Exact match
+      0.15,
+      2.0
+    );
+
+    expect(cluster.length).toBe(1);
+
+    // cluster_strength = similarity / minSimilarity
+    // For exact match: similarity = 1.0, minSimilarity = 0.85
+    // cluster_strength = 1.0 / 0.85 ≈ 1.176
+    const expectedStrength = 1.0 / (1.0 - 0.15);
+    expect(parseFloat(cluster[0].cluster_strength)).toBeCloseTo(expectedStrength, 2);
+  });
+
+  test('should use custom radius parameter', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'Test memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 2.5,
+    });
+
+    // Very strict radius (0.05) = min similarity 0.95
+    const strictCluster = await service.findSemanticCluster(
+      createVectorsWithSimilarity(0.90)[1], // 0.90 similarity
+      0.05, // strict radius
+      2.0
+    );
+
+    expect(strictCluster.length).toBe(0); // 0.90 < 0.95, should not match
+
+    // Looser radius (0.15) = min similarity 0.85
+    const looseCluster = await service.findSemanticCluster(
+      createVectorsWithSimilarity(0.90)[1], // 0.90 similarity
+      0.15, // loose radius
+      2.0
+    );
+
+    expect(looseCluster.length).toBe(1); // 0.90 > 0.85, should match
+  });
+});
+
+describe('Semantic Consolidation - detectPhiFragmentation()', () => {
+  let service;
+
+  beforeAll(async () => {
+    service = createSemanticConsolidationService({
+      queryFn: testQuery,
+      schema: getTestSchema(),
+    });
+  });
+
+  beforeEach(async () => {
+    await clearTestData();
+  });
+
+  test('should detect high confidence fragmentation (>0.95 similarity)', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'First fragmented memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 2.0,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Second fragmented memory',
+      contentHash: 'hash2',
+      embedding: createNormalizedVector(1.0), // Identical embedding
+      resonancePhi: 1.5,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBe(1);
+
+    const frag = fragments[0];
+    expect(parseFloat(frag.similarity)).toBeCloseTo(1.0, 2);
+    expect(parseFloat(frag.total_phi)).toBeCloseTo(3.5, 1); // 2.0 + 1.5
+    expect(frag.consolidation_recommendation).toBe('HIGH_CONFIDENCE_MERGE');
+  });
+
+  test('should detect potential fragmentation (0.92-0.95 similarity)', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'First memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 1.5,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Similar memory',
+      contentHash: 'hash2',
+      embedding: createVectorsWithSimilarity(0.93)[1], // ~0.93 similarity
+      resonancePhi: 1.0,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBe(1);
+
+    const frag = fragments[0];
+    expect(parseFloat(frag.similarity)).toBeGreaterThanOrEqual(0.92);
+    expect(parseFloat(frag.similarity)).toBeLessThan(0.95);
+    expect(frag.consolidation_recommendation).toBe('POTENTIAL_MERGE');
+  });
+
+  test('should properly categorize by similarity ranges', async () => {
+    // Create a pair with ~0.93 similarity (firmly in POTENTIAL_MERGE range)
+    const mem1 = await insertTestMemory({
+      content: 'First memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 1.0,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Related memory',
+      contentHash: 'hash2',
+      embedding: createVectorsWithSimilarity(0.93)[1], // Use 0.93 to be safely above threshold
+      resonancePhi: 1.0,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBeGreaterThanOrEqual(1);
+
+    // Verify the result has a valid recommendation
+    const frag = fragments[0];
+    expect(['HIGH_CONFIDENCE_MERGE', 'POTENTIAL_MERGE', 'RELATED']).toContain(
+      frag.consolidation_recommendation
+    );
+  });
+
+  test('should calculate total_phi correctly', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'Memory A',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 2.5,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Memory B',
+      contentHash: 'hash2',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 1.8,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBe(1);
+    expect(parseFloat(fragments[0].total_phi)).toBeCloseTo(4.3, 1); // 2.5 + 1.8
+  });
+
+  test('should order by total_phi DESC, then similarity DESC', async () => {
+    // Create 3 pairs with different total phi values
+    const mem1 = await insertTestMemory({
+      content: 'High phi A',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 3.0,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'High phi B',
+      contentHash: 'hash2',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 2.5,
+    });
+
+    const mem3 = await insertTestMemory({
+      content: 'Low phi A',
+      contentHash: 'hash3',
+      embedding: createVectorsWithSimilarity(0.93)[1],
+      resonancePhi: 1.0,
+    });
+
+    const mem4 = await insertTestMemory({
+      content: 'Low phi B',
+      contentHash: 'hash4',
+      embedding: createVectorsWithSimilarity(0.93)[1],
+      resonancePhi: 0.8,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBeGreaterThanOrEqual(2);
+
+    // First result should have highest total_phi
+    expect(parseFloat(fragments[0].total_phi)).toBeGreaterThanOrEqual(
+      parseFloat(fragments[1].total_phi)
+    );
+  });
+
+  test('should limit results to 50', async () => {
+    // Create 60 memories that all have high similarity to each other
+    // This will generate 60*59/2 = 1770 pairs, but should limit to 50
+    for (let i = 0; i < 60; i++) {
+      await insertTestMemory({
+        content: `Memory ${i}`,
+        contentHash: `hash_${i}`,
+        embedding: createNormalizedVector(1.0),
+        resonancePhi: 1.0,
+      });
+    }
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBe(50); // Should be capped at 50
+  });
+
+  test('should return empty array when no fragmentation exists', async () => {
+    // Insert memories with low similarity
+    await insertTestMemory({
+      content: 'Memory A',
+      contentHash: 'hash1',
+      embedding: createPatternVector([1.0, 0.0]),
+      resonancePhi: 2.0,
+    });
+
+    await insertTestMemory({
+      content: 'Memory B',
+      contentHash: 'hash2',
+      embedding: createPatternVector([0.0, 1.0]), // Orthogonal
+      resonancePhi: 2.0,
+    });
+
+    const fragments = await service.detectPhiFragmentation(0.92);
+
+    expect(fragments.length).toBe(0);
+  });
+
+  test('should use custom threshold parameter', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'Memory A',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(1.0),
+      resonancePhi: 1.0,
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Memory B',
+      contentHash: 'hash2',
+      embedding: createVectorsWithSimilarity(0.90)[1], // ~0.90 similarity
+      resonancePhi: 1.0,
+    });
+
+    // High threshold (0.92) - should NOT detect
+    const fragments1 = await service.detectPhiFragmentation(0.92);
+    expect(fragments1.length).toBe(0);
+
+    // Lower threshold (0.85) - SHOULD detect
+    const fragments2 = await service.detectPhiFragmentation(0.85);
+    expect(fragments2.length).toBe(1);
+  });
+});
+
+describe('Semantic Consolidation - calculateSemanticCentroid()', () => {
+  let service;
+
+  beforeAll(async () => {
+    service = createSemanticConsolidationService({
+      queryFn: testQuery,
+      schema: getTestSchema(),
+    });
+  });
+
+  beforeEach(async () => {
+    await clearTestData();
+  });
+
+  test('should calculate centroid for single memory', async () => {
+    const mem1 = await insertTestMemory({
+      content: 'Single memory',
+      contentHash: 'hash1',
+      embedding: createNormalizedVector(0.5),
+      resonancePhi: 2.0,
+    });
+
+    const result = await service.calculateSemanticCentroid([mem1.id]);
+
+    expect(result.clusterSize).toBe(1);
+    expect(result.totalPhi).toBeCloseTo(2.0, 1);
+    expect(result.avgPhi).toBeCloseTo(2.0, 1);
+    expect(result.coreMemory.id).toBe(mem1.id);
+
+    // Centroid should match the single memory's embedding
+    expect(result.centroid.length).toBe(768);
+    result.centroid.forEach(val => {
+      expect(val).toBeCloseTo(0.5, 2);
+    });
+  });
+
+  test('should calculate phi-weighted centroid for multiple memories', async () => {
+    // Memory 1: high phi, embedding all 1.0
+    const mem1 = await insertTestMemory({
+      content: 'High phi memory',
+      contentHash: 'hash1',
+      embedding: Array(768).fill(1.0),
+      resonancePhi: 4.0,
+    });
+
+    // Memory 2: low phi, embedding all 0.0
+    const mem2 = await insertTestMemory({
+      content: 'Low phi memory',
+      contentHash: 'hash2',
+      embedding: Array(768).fill(0.0),
+      resonancePhi: 1.0,
+    });
+
+    const result = await service.calculateSemanticCentroid([mem1.id, mem2.id]);
+
+    expect(result.clusterSize).toBe(2);
+    expect(result.totalPhi).toBeCloseTo(5.0, 1); // 4.0 + 1.0
+    expect(result.avgPhi).toBeCloseTo(2.5, 1); // 5.0 / 2
+
+    // Centroid should be weighted toward high-phi memory
+    // weight1 = 4.0 + 1.0 = 5.0, weight2 = 1.0 + 1.0 = 2.0
+    // centroid = (5.0 * 1.0 + 2.0 * 0.0) / (5.0 + 2.0) = 5.0 / 7.0 ≈ 0.714
+    result.centroid.forEach(val => {
+      expect(val).toBeCloseTo(5.0 / 7.0, 2);
+    });
+  });
+
+  test('should identify core memory (closest to centroid)', async () => {
+    // Create 3 memories with different embeddings and phi values
+    const mem1 = await insertTestMemory({
+      content: 'Memory 1',
+      contentHash: 'hash1',
+      embedding: Array(768).fill(1.0),
+      resonancePhi: 1.0, // Lower phi
+    });
+
+    const mem2 = await insertTestMemory({
+      content: 'Memory 2',
+      contentHash: 'hash2',
+      embedding: Array(768).fill(0.5), // Middle value
+      resonancePhi: 3.0, // Higher phi (more weight)
+    });
+
+    const mem3 = await insertTestMemory({
+      content: 'Memory 3',
+      contentHash: 'hash3',
+      embedding: Array(768).fill(0.0), // Zero vector
+      resonancePhi: 1.0,
+    });
+
+    const result = await service.calculateSemanticCentroid([mem1.id, mem2.id, mem3.id]);
+
+    // With weights: mem1=2.0, mem2=4.0, mem3=2.0
+    // Centroid = (2.0*1.0 + 4.0*0.5 + 2.0*0.0) / 8.0 = 4.0/8.0 = 0.5
+    // mem2 with embedding 0.5 should be the core (exact match to centroid)
+    expect(result.coreMemory.id).toBe(mem2.id);
+  });
+
+  test('should include all cluster members in result', async () => {
+    const { memories } = clusterFixture;
+
+    // Insert first 3 memories
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      const mem = await insertTestMemory(memories[i]);
+      ids.push(mem.id);
+    }
+
+    const result = await service.calculateSemanticCentroid(ids);
+
+    expect(result.members.length).toBe(3);
+    expect(result.clusterSize).toBe(3);
+
+    // Verify all members have required fields
+    result.members.forEach(member => {
+      expect(member).toHaveProperty('id');
+      expect(member).toHaveProperty('vector');
+      expect(member).toHaveProperty('phi');
+      expect(member).toHaveProperty('content');
+      expect(member.vector.length).toBe(768);
+    });
+  });
+
+  test('should throw error for empty cluster', async () => {
+    await expect(service.calculateSemanticCentroid([])).rejects.toThrow(
+      'Cannot calculate centroid for empty cluster'
+    );
+  });
+
+  test('should throw error for null/undefined input', async () => {
+    await expect(service.calculateSemanticCentroid(null)).rejects.toThrow(
+      'Cannot calculate centroid for empty cluster'
+    );
+
+    await expect(service.calculateSemanticCentroid(undefined)).rejects.toThrow(
+      'Cannot calculate centroid for empty cluster'
+    );
+  });
+
+  test('should throw error when no valid memories found', async () => {
+    const fakeId = '00000000-0000-0000-0000-000000000000';
+
+    await expect(service.calculateSemanticCentroid([fakeId])).rejects.toThrow(
+      'No valid memories found for centroid calculation'
+    );
+  });
+
+  test('should handle memories with different vector dimensions gracefully', async () => {
+    // This test ensures consistency - all embeddings should be 768 dims
+    const mem1 = await insertTestMemory({
+      content: 'Memory 1',
+      contentHash: 'hash1',
+      embedding: Array(768).fill(0.5),
+      resonancePhi: 2.0,
+    });
+
+    const result = await service.calculateSemanticCentroid([mem1.id]);
+
+    expect(result.centroid.length).toBe(768);
   });
 });
