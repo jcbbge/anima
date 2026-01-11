@@ -16,6 +16,11 @@ import {
   adjustResonance,
   detectPotentialCatalyst,
 } from "./resonanceService.js";
+import {
+  findSemanticDuplicate,
+  mergeIntoSemanticCentroid,
+} from "./semanticConsolidationService.js";
+import { getConfig } from "../config/environment.js";
 
 /**
  * Custom error class for memory service errors
@@ -42,14 +47,45 @@ class MemoryServiceError extends Error {
  */
 export async function addMemory(memoryData) {
   const { content, category, tags, source, isCatalyst = false } = memoryData;
+  const config = getConfig();
 
-  // Generate content hash for deduplication
+  // Step 1: Generate content hash for syntactic deduplication
   const contentHash = generateHash(content);
 
-  // Check if memory already exists
+  // Step 2: Generate embedding (needed for both semantic check and insert)
+  const embeddingResult = await generateEmbedding(content);
+
+  // Step 3: SEMANTIC DEDUPLICATION (if enabled)
+  // Check for semantically identical memories BEFORE hash check
+  // This prevents φ fragmentation across semantic variants
+  if (config.features.semanticConsolidation) {
+    try {
+      const semanticMatch = await findSemanticDuplicate(embeddingResult.embedding);
+
+      if (semanticMatch) {
+        // CONSOLIDATE: Merge into existing semantic centroid
+        const consolidationResult = await mergeIntoSemanticCentroid(
+          semanticMatch.id,
+          content,
+          isCatalyst,
+          semanticMatch.similarity
+        );
+
+        return {
+          ...consolidationResult,
+          embeddingProvider: embeddingResult.provider,
+        };
+      }
+    } catch (error) {
+      // Log error but don't fail memory creation
+      console.error('⚠️  Semantic consolidation failed, falling back to normal insert:', error.message);
+    }
+  }
+
+  // Step 4: Syntactic deduplication (exact hash match fallback)
   const existingResult = await query(
     `SELECT id, content, content_hash, tier, access_count, created_at, updated_at
-     FROM memories 
+     FROM memories
      WHERE content_hash = $1 AND deleted_at IS NULL`,
     [contentHash],
   );
@@ -57,9 +93,9 @@ export async function addMemory(memoryData) {
   if (existingResult.rows.length > 0) {
     const existing = existingResult.rows[0];
 
-    // Increment access count for duplicate
+    // Increment access count for exact duplicate
     await query(
-      `UPDATE memories 
+      `UPDATE memories
        SET access_count = access_count + 1,
            last_accessed = NOW(),
            updated_at = NOW()
@@ -73,23 +109,21 @@ export async function addMemory(memoryData) {
         access_count: existing.access_count + 1,
       },
       isDuplicate: true,
+      exactMatch: true,
+      embeddingProvider: embeddingResult.provider,
     };
   }
 
-  // Generate embedding
-  const embeddingResult = await generateEmbedding(content);
-
-  // Calculate initial phi based on catalyst flag
+  // Step 5: CREATE NEW MEMORY (no semantic or syntactic match found)
   const initialPhi = isCatalyst ? 1.0 : 0.0;
 
-  // Insert new memory
   const insertResult = await query(
     `INSERT INTO memories (
-      content, 
-      content_hash, 
-      embedding, 
-      category, 
-      tags, 
+      content,
+      content_hash,
+      embedding,
+      category,
+      tags,
       source,
       tier,
       tier_last_updated,
@@ -98,7 +132,7 @@ export async function addMemory(memoryData) {
       resonance_phi,
       is_catalyst
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW(), $8, $9)
-    RETURNING 
+    RETURNING
       id, content, content_hash, tier, category, tags, source,
       access_count, resonance_phi, is_catalyst, created_at, updated_at`,
     [

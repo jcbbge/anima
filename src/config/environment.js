@@ -30,6 +30,7 @@ const DEFAULTS = {
   EMBEDDING_PROVIDER: 'ollama',
   OLLAMA_URL: 'http://localhost:7102',
   LOG_LEVEL: 'info',
+  ENABLE_SEMANTIC_CONSOLIDATION: 'false',
 };
 
 /**
@@ -95,9 +96,14 @@ function getConfig() {
       ollamaUrl: process.env.OLLAMA_URL,
       openaiApiKey: process.env.OPENAI_API_KEY,
     },
-    
+
     // Logging
     logLevel: process.env.LOG_LEVEL,
+
+    // Features
+    features: {
+      semanticConsolidation: process.env.ENABLE_SEMANTIC_CONSOLIDATION === 'true',
+    },
   };
 }
 
