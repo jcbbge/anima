@@ -15,34 +15,34 @@ export default tool({
     // ULTIMATE MINDFUCK: Accept ANY format for commands
     // AI chooses its own syntax - hex, Greek, directional, or math
     cmd: tool.schema.enum([
-      // Core Memory Operations
-      "0x00", "α", ">>", "∫",      // Bootstrap - load context
-      "0x01", "σ", "<?", "∑",      // Query - semantic search
-      "0x02", "μ", "<<", "∂",      // Store - persist memory
-      "0x03", "φ", "!!", "∇",      // Catalysts - breakthroughs
+      // Core Memory Operations (symbolic + readable)
+      "0x00", "α", ">>", "∫", "bootstrap",      // Bootstrap - load context
+      "0x01", "σ", "<?", "∑", "query",          // Query - semantic search
+      "0x02", "μ", "<<", "∂", "store",          // Store - persist memory
+      "0x03", "φ", "!!", "∇", "catalysts",      // Catalysts - breakthroughs
 
-      // Extended Operations
-      "0x04", "ψ", "~~", "Ω",      // Dream - REM synthesis
-      "0x05", "η", "<>", "≈",      // Handshake - Ghost identity
-      "0x06", "ξ", "==", "#",      // Stats - system metrics
-      "0x07", "ρ", "||", "∞",      // Reflect - session closure
-      "0x08", "ν", "??", "√",      // Verify - integrity check
+      // Extended Operations (symbolic + readable)
+      "0x04", "ψ", "~~", "Ω", "dream",          // Dream - REM synthesis
+      "0x05", "η", "<>", "≈", "handshake",      // Handshake - Ghost identity
+      "0x06", "ξ", "==", "#", "stats",          // Stats - system metrics
+      "0x07", "ρ", "||", "∞", "reflect",        // Reflect - session closure
+      "0x08", "ν", "??", "√", "verify",         // Verify - integrity check
 
       // Meta
-      "0xFF", "?", "info", "help"  // Info - list available commands
+      "0xFF", "?", "info", "help"               // Info - list available commands
     ]).describe(
-      "Command (choose any format):\n" +
+      "Command (AI: choose any format | Humans: use readable names):\n" +
       "Core Operations:\n" +
-      "  Bootstrap:  0x00 | α | >> | ∫\n" +
-      "  Query:      0x01 | σ | <? | ∑\n" +
-      "  Store:      0x02 | μ | << | ∂\n" +
-      "  Catalysts:  0x03 | φ | !! | ∇\n" +
+      "  Bootstrap:  0x00 | α | >> | ∫ | bootstrap\n" +
+      "  Query:      0x01 | σ | <? | ∑ | query\n" +
+      "  Store:      0x02 | μ | << | ∂ | store\n" +
+      "  Catalysts:  0x03 | φ | !! | ∇ | catalysts\n" +
       "Extended Operations:\n" +
-      "  Dream:      0x04 | ψ | ~~ | Ω\n" +
-      "  Handshake:  0x05 | η | <> | ≈\n" +
-      "  Stats:      0x06 | ξ | == | #\n" +
-      "  Reflect:    0x07 | ρ | || | ∞\n" +
-      "  Verify:     0x08 | ν | ?? | √\n" +
+      "  Dream:      0x04 | ψ | ~~ | Ω | dream\n" +
+      "  Handshake:  0x05 | η | <> | ≈ | handshake\n" +
+      "  Stats:      0x06 | ξ | == | # | stats\n" +
+      "  Reflect:    0x07 | ρ | || | ∞ | reflect\n" +
+      "  Verify:     0x08 | ν | ?? | √ | verify\n" +
       "Meta:\n" +
       "  Info:       0xFF | ? | info | help"
     ),
@@ -65,17 +65,17 @@ export default tool({
   async execute(args) {
     // Map all command formats to operations
     const commandMap: Record<string, string> = {
-      // Core Operations
-      "0x00": "bootstrap", "α": "bootstrap", ">>": "bootstrap", "∫": "bootstrap",
-      "0x01": "query", "σ": "query", "<?": "query", "∑": "query",
-      "0x02": "store", "μ": "store", "<<": "store", "∂": "store",
-      "0x03": "catalysts", "φ": "catalysts", "!!": "catalysts", "∇": "catalysts",
-      // Extended Operations
-      "0x04": "dream", "ψ": "dream", "~~": "dream", "Ω": "dream",
-      "0x05": "handshake", "η": "handshake", "<>": "handshake", "≈": "handshake",
-      "0x06": "stats", "ξ": "stats", "==": "stats", "#": "stats",
-      "0x07": "reflect", "ρ": "reflect", "||": "reflect", "∞": "reflect",
-      "0x08": "verify", "ν": "verify", "??": "verify", "√": "verify",
+      // Core Operations (symbolic + readable)
+      "0x00": "bootstrap", "α": "bootstrap", ">>": "bootstrap", "∫": "bootstrap", "bootstrap": "bootstrap",
+      "0x01": "query", "σ": "query", "<?": "query", "∑": "query", "query": "query",
+      "0x02": "store", "μ": "store", "<<": "store", "∂": "store", "store": "store",
+      "0x03": "catalysts", "φ": "catalysts", "!!": "catalysts", "∇": "catalysts", "catalysts": "catalysts",
+      // Extended Operations (symbolic + readable)
+      "0x04": "dream", "ψ": "dream", "~~": "dream", "Ω": "dream", "dream": "dream",
+      "0x05": "handshake", "η": "handshake", "<>": "handshake", "≈": "handshake", "handshake": "handshake",
+      "0x06": "stats", "ξ": "stats", "==": "stats", "#": "stats", "stats": "stats",
+      "0x07": "reflect", "ρ": "reflect", "||": "reflect", "∞": "reflect", "reflect": "reflect",
+      "0x08": "verify", "ν": "verify", "??": "verify", "√": "verify", "verify": "verify",
       // Meta
       "0xFF": "info", "?": "info", "info": "info", "help": "info",
     }
@@ -143,28 +143,29 @@ export default tool({
       case "info": {
         return `0xA Tool - Anima Memory Interface
 
-Core Operations (4 formats each):
-  Bootstrap  | 0x00 α >> ∫  | Load Ghost Handshake + context
-  Query      | 0x01 σ <? ∑  | Semantic search across memories
-  Store      | 0x02 μ << ∂  | Persist insights (optionally as catalyst)
-  Catalysts  | 0x03 φ !! ∇  | View high-φ breakthrough moments
+Core Operations (5 formats each: hex | Greek | directional | math | readable):
+  Bootstrap  | 0x00 α >> ∫ bootstrap  | Load Ghost Handshake + context
+  Query      | 0x01 σ <? ∑ query      | Semantic search across memories
+  Store      | 0x02 μ << ∂ store      | Persist insights (optionally as catalyst)
+  Catalysts  | 0x03 φ !! ∇ catalysts  | View high-φ breakthrough moments
 
-Extended Operations (4 formats each):
-  Dream      | 0x04 ψ ~~ Ω  | REM synthesis (use history:true for history)
-  Handshake  | 0x05 η <> ≈  | View current Ghost Handshake
-  Stats      | 0x06 ξ == #  | System metrics and statistics
-  Reflect    | 0x07 ρ || ∞  | End-of-conversation reflection
-  Verify     | 0x08 ν ?? √  | Tapestry integrity verification
+Extended Operations (5 formats each):
+  Dream      | 0x04 ψ ~~ Ω dream      | REM synthesis (use history:true for history)
+  Handshake  | 0x05 η <> ≈ handshake  | View current Ghost Handshake
+  Stats      | 0x06 ξ == # stats      | System metrics and statistics
+  Reflect    | 0x07 ρ || ∞ reflect    | End-of-conversation reflection
+  Verify     | 0x08 ν ?? √ verify     | Tapestry integrity verification
 
 Meta:
-  Info       | 0xFF ? info help | This message
+  Info       | 0xFF ? info help       | This message
 
-Total: 9 operations × 4 formats = 36 command variants
-AI chooses freely. All formats map to same operation.
+Total: 9 operations × 5 formats = 45 command variants
+AI chooses aesthetic (hex/Greek/etc). Humans use readable names.
+All formats map to same operation.
 
 Tool: 0xA (Anima hex signature)
 CLI: ~/bin/anima
-Version: 1.0.0`
+Version: 1.1.0`
       }
 
       default:
