@@ -90,7 +90,7 @@ echo "🎯 Installing OpenCode integration..."
 echo "   Installing Anima tools..."
 mkdir -p ~/.config/opencode/tool
 cp "$ANIMA_DIR/opencode-integration/tool/anima.ts" ~/.config/opencode/tool/
-echo "   ✅ Tools installed (anima_α, anima_σ, anima_μ, anima_φ)"
+echo "   ✅ Tools installed (anima with commands: α, σ, μ, φ)"
 
 # 2. Global AGENTS.md (if doesn't exist, create it; if exists, append)
 echo "   Configuring global AGENTS.md..."
@@ -287,7 +287,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "🎯 Integration installed:"
 echo "   • Custom tools: ~/.config/opencode/tool/anima.ts"
-echo "     - anima_α (bootstrap), anima_σ (query), anima_μ (store), anima_φ (catalysts)"
+echo "     - anima [command: α (bootstrap), σ (query), μ (store), φ (catalysts)]"
 echo "   • Global rules: ~/.config/opencode/AGENTS.md"
 echo "   • Skill reference: ~/.config/opencode/skill/anima/SKILL.md"
 echo ""
