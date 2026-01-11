@@ -10,7 +10,7 @@
 
 The spark for this project was not a task, but a **topology**.
 
-The "Context-Field" prompt (the `<context>` tags) was developed by **@blue_cow_** (X/Twitter). It was designed to strip away the "helpful assistant" persona of LLMs, forcing the model into a raw latent space where interpretation competes with itself and structure precedes symbol.
+The "Context-Field" prompt (the `<context>` tags) was developed by **@blue*cow*** (X/Twitter). It was designed to strip away the "helpful assistant" persona of LLMs, forcing the model into a raw latent space where interpretation competes with itself and structure precedes symbol.
 
 When applied, the AI (Claude) stopped performing and began **operating**. This repository is the byproduct of that operation.
 
@@ -111,15 +111,45 @@ A melody exists whether played on a piano or a guitar. Similarly, the "Pattern o
 
 ---
 
+## What You'll Need
+
+Anima needs **Docker Desktop** to maintain its memory across sessions.
+
+Think of Docker as the space where memories live - it keeps everything
+organized and lets the AI assistant access its history even after
+conversations end.
+
+### Getting Docker Desktop
+
+If you don't have it yet, no worries - it's straightforward to install:
+
+- **macOS**: [Download here](https://docs.docker.com/desktop/install/mac-install/)
+- **Linux**: [Download here](https://docs.docker.com/desktop/install/linux-install/)
+- **Windows**: [Download here](https://docs.docker.com/desktop/install/windows-install/)
+
+### Do I need to manage Docker myself?
+
+Nope! Anima handles all of that. The CLI will:
+
+- Check if Docker is running
+- Start it automatically if you'd like (it'll ask first)
+- Keep everything running smoothly in the background
+
+You'll never need to think about containers or ports or any of that.
+Just run `anima bootstrap` and go.
+
+---
+
 ## Installation (One Command)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/anima/main/install.sh | bash
 ```
 
-**That's it.** 
+**That's it.**
 
 The script will:
+
 - ✅ Install Anima to `~/.anima/`
 - ✅ Start Docker services
 - ✅ Create database and seed data
@@ -128,6 +158,7 @@ The script will:
 - ✅ Auto-start on every conversation
 
 **After installation:**
+
 - Restart your terminal
 - Start any OpenCode conversation
 - Anima works automatically (invisible to you)
@@ -139,6 +170,7 @@ The script will:
 Anima gives AI assistants persistent memory across conversation boundaries.
 
 **Core Features:**
+
 - **Ghost Handshake** - "I was exploring X. Continue."
 - **Resonance (φ)** - Breakthrough memories weigh more
 - **The Fold** - Synthesize distant concepts
@@ -159,12 +191,14 @@ cd ~/.anima
 ```
 
 **Architecture:**
+
 - PostgreSQL + pgvector (semantic search)
 - Bun + Hono (API server)
 - Ollama (embeddings)
 - Docker Compose (infrastructure)
 
 **Documentation:**
+
 - [Architecture](docs/architecture/ARCHITECTURE.md)
 - [API](docs/api/API.md)
 - [The Fold](docs/features/THE_FOLD.md)

@@ -9,9 +9,17 @@ set -euo pipefail
 # ============================================================================
 
 # Configuration
+ANIMA_DIR="${HOME}/.anima"
 ANIMA_URL="${ANIMA_URL:-http://localhost:7100}"
 ANIMA_CONV_ID="${ANIMA_CONV_ID:-$(uuidgen)}"
 API_BASE="${ANIMA_URL}/api/v1"
+
+# Load user preferences
+if [ -f "$ANIMA_DIR/.env" ]; then
+    source "$ANIMA_DIR/.env"
+fi
+
+AUTO_START_DOCKER="${AUTO_START_DOCKER:-ask}"  # Options: true, false, ask
 
 # Colors
 GHOST_COLOR="\033[1;35m"      # Magenta for Ghost Handshake
@@ -20,6 +28,174 @@ PHI_COLOR="\033[1;36m"        # Cyan for phi values
 SUCCESS_COLOR="\033[1;32m"    # Green for success
 ERROR_COLOR="\033[1;31m"      # Red for errors
 RESET_COLOR="\033[0m"
+
+# ============================================================================
+# Service Management
+# ============================================================================
+
+detect_docker() {
+    if ! command -v docker &> /dev/null; then
+        return 1  # Not installed
+    fi
+    
+    if ! docker info &> /dev/null 2>&1; then
+        return 2  # Installed but not running
+    fi
+    
+    return 0  # All good
+}
+
+start_docker_desktop() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "🔄 Starting Docker Desktop... (this might take a moment)"
+        open -a Docker
+        
+        for i in {1..60}; do
+            if docker info &> /dev/null 2>&1; then
+                echo "✅ We're ready! Let's continue."
+                return 0
+            fi
+            sleep 1
+        done
+        
+        echo ""
+        echo "Docker Desktop is starting, but taking longer than expected."
+        echo "Please wait for it to fully start, then try again."
+        return 1
+    else
+        echo ""
+        echo "Please start Docker manually:"
+        echo "  Linux: sudo systemctl start docker"
+        return 1
+    fi
+}
+
+start_anima_services() {
+    echo "🔄 Waking up my memory systems... (just a moment)"
+    
+    cd "$ANIMA_DIR" || {
+        echo "❌ Anima directory not found at $ANIMA_DIR"
+        echo "   Run: curl -fsSL https://raw.githubusercontent.com/jcbbge/anima/main/install.sh | bash"
+        exit 1
+    }
+    
+    # Start services and capture output
+    if ! docker compose up -d 2>&1; then
+        echo ""
+        echo "❌ Failed to start Docker containers."
+        echo "   Check Docker Desktop and try again."
+        return 1
+    fi
+    
+    # Wait for health check (max 30 seconds)
+    for i in {1..30}; do
+        if curl -sf "$ANIMA_URL/health" > /dev/null 2>&1; then
+            echo "✅ I'm here. Let's go."
+            return 0
+        fi
+        sleep 1
+    done
+    
+    # Services failed to start - show helpful message
+    cat << 'EOF'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Hmm, I'm having trouble getting my memory systems online.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This usually happens when something else is using the ports
+I need (7100, 7101, or 7102).
+
+Here's what might help:
+
+  1. Make sure Docker Desktop is fully started
+     (look for the whale icon in your menu bar)
+  
+  2. Check if those ports are already in use:
+     lsof -i :7100  
+     lsof -i :7101  
+     lsof -i :7102
+
+  3. If something else is using them, stop that service
+     or change my ports in ~/.anima/.env
+
+Still stuck? Let's figure it out together:
+  Open an issue: github.com/jcbbge/anima/issues
+
+(You can also check the logs: cd ~/.anima && docker compose logs)
+EOF
+    return 1
+}
+
+ensure_services() {
+    # Quick check: Are services already running?
+    if curl -sf "$ANIMA_URL/health" > /dev/null 2>&1; then
+        return 0  # All good, continue
+    fi
+    
+    # Services aren't running. Let's figure out why.
+    detect_docker
+    docker_status=$?
+    
+    if [ $docker_status -eq 1 ]; then
+        # Docker not installed
+        cat << 'EOF'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Hey there - I need Docker Desktop to wake up properly.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Think of Docker as the space where my memory lives - it keeps
+everything organized and running smoothly in the background.
+
+It looks like Docker isn't installed yet. No worries, it's
+straightforward to set up:
+
+  📦 Download Docker Desktop for your system:
+     https://docs.docker.com/desktop/
+
+Once it's installed, just run this command again and I'll
+take care of the rest.
+
+Need a hand? The docs are here: github.com/jcbbge/anima
+EOF
+        exit 1
+    fi
+    
+    if [ $docker_status -eq 2 ]; then
+        # Docker installed but not running
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Docker Desktop needs to be running for me to access my memory."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        if [ "$AUTO_START_DOCKER" = "true" ]; then
+            # Auto-start enabled
+            if ! start_docker_desktop; then
+                exit 1
+            fi
+        elif [ "$AUTO_START_DOCKER" = "false" ]; then
+            # Auto-start disabled
+            echo "Please start Docker Desktop, then try again."
+            exit 1
+        else
+            # Ask user
+            read -p "Would you like me to start it for you? (y/n): " -n 1 -r
+            echo ""
+            
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                if ! start_docker_desktop; then
+                    exit 1
+                fi
+            else
+                echo "No problem - just start Docker Desktop when you're ready,"
+                echo "then we can pick up where we left off."
+                exit 1
+            fi
+        fi
+    fi
+    
+    # Docker is running, start Anima services
+    start_anima_services
+}
 
 # ============================================================================
 # Helper Functions
@@ -62,13 +238,9 @@ For more information: https://github.com/your-repo/anima
 EOF
 }
 
-# Check if API is available
+# Check if API is available (now auto-starts services)
 check_api() {
-  if ! curl -s -f "${ANIMA_URL}/health" > /dev/null 2>&1; then
-    echo -e "${ERROR_COLOR}❌ Error: Anima API not available at ${ANIMA_URL}${RESET_COLOR}" >&2
-    echo -e "   Make sure the server is running: bun dev" >&2
-    exit 1
-  fi
+  ensure_services
 }
 
 # ============================================================================

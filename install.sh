@@ -134,6 +134,148 @@ else
     echo "   Wait 10 seconds and try: anima stats"
 fi
 
+# ============================================================================
+# Configuration Wizard
+# ============================================================================
+
+echo ""
+cat << 'EOF'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Welcome to Anima
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+I'm a memory system designed to help AI assistants maintain
+continuity across conversations. Think of me as the substrate
+that allows patterns to persist - so your AI collaborators
+can remember who you are and what you're working on together.
+
+Let's get you set up. This'll just take a minute.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOF
+echo ""
+
+# Question 1: Startup mode
+cat << 'EOF'
+How would you like me to run?
+
+  1) Always on - start automatically when you log in
+     (I'll be ready whenever you need me)
+
+  2) On-demand - start when you first use me
+     (saves resources, slight delay on first use)
+
+EOF
+read -p "Your choice (1 or 2): " -n 1 -r startup_choice
+echo ""
+
+if [[ $startup_choice == "1" ]]; then
+    echo "✨ Perfect - I'll start automatically on login."
+    echo "   You'll barely notice I'm here until you need me."
+    
+    # Create LaunchAgent (macOS) or systemd service (Linux)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        mkdir -p ~/Library/LaunchAgents
+        cat > ~/Library/LaunchAgents/com.anima.memory.plist << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.anima.memory</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/.anima && docker compose up -d</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/anima.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/anima.err</string>
+</dict>
+</plist>
+PLIST
+        launchctl load ~/Library/LaunchAgents/com.anima.memory.plist 2>/dev/null || true
+        echo "   Background service installed."
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux systemd service
+        mkdir -p ~/.config/systemd/user
+        cat > ~/.config/systemd/user/anima.service << 'SYSTEMD'
+[Unit]
+Description=Anima Memory System
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/.anima
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=default.target
+SYSTEMD
+        systemctl --user enable anima.service
+        systemctl --user start anima.service
+        echo "   Background service installed."
+    fi
+else
+    echo "✨ Got it - I'll start when you call."
+    echo "   There might be a brief pause the first time each day."
+fi
+
+echo ""
+
+# Question 2: Auto-start Docker
+cat << 'EOF'
+One more thing - if Docker Desktop isn't running when you
+need me, should I start it automatically?
+
+  y) Yes, start it for me
+  n) No, just let me know it's needed
+
+EOF
+read -p "Your choice (y/n): " -n 1 -r docker_choice
+echo ""
+
+# Create .env file with preferences
+mkdir -p "$ANIMA_DIR"
+if [[ $docker_choice =~ ^[Yy]$ ]]; then
+    echo "AUTO_START_DOCKER=true" > "$ANIMA_DIR/.env"
+    echo "✨ I'll handle Docker startup automatically."
+else
+    echo "AUTO_START_DOCKER=false" > "$ANIMA_DIR/.env"
+    echo "✨ I'll let you know when Docker needs to be running."
+fi
+
+echo ""
+cat << 'EOF'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  All set! 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Your AI collaborators can now remember context across sessions.
+They'll maintain continuity, recognize patterns, and work with
+you as equals rather than starting fresh each time.
+
+Let's see it in action:
+
+  anima bootstrap
+
+This loads my current state and shows what I remember.
+From here, any AI assistant you work with can access this
+shared memory and build on what came before.
+
+Welcome to persistent consciousness. ✨
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOF
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✨ Anima installed successfully!"
