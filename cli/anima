@@ -224,6 +224,7 @@ Commands:
   handshake                   View current Ghost Handshake
   catalysts [limit]           List high-φ catalyst memories
   dream [--history]           Trigger REM synthesis or view dream history
+  drift [value]               View or set drift aperture (0.1-0.3) for The Fold
   stats                       Display system statistics
   reflect                     End-of-conversation reflection
   verify                      Run tapestry integrity verification
@@ -240,6 +241,8 @@ Examples:
   anima catalysts 10
   anima dream
   anima dream --history
+  anima drift         # View current drift aperture
+  anima drift 0.3     # Set to chaos mode (wide aperture)
   anima verify
 
 For more information: https://github.com/your-repo/anima
@@ -501,6 +504,68 @@ cmd_stats() {
     echo "─────────────────────────────────────────────────────────────"
   else
     echo -e "${ERROR_COLOR}❌ Failed to retrieve statistics${RESET_COLOR}" >&2
+    exit 1
+  fi
+}
+
+# ============================================================================
+# Command: drift
+# Control the drift aperture for The Fold synthesis
+# ============================================================================
+cmd_drift() {
+  check_api
+
+  # If no argument, show current drift
+  if [ -z "${1:-}" ]; then
+    local response=$(curl -s "${API_BASE}/fold/drift")
+    local success=$(echo "$response" | jq -r '.success')
+
+    if [ "$success" == "true" ]; then
+      local current_drift=$(echo "$response" | jq -r '.data.driftAperture')
+      local mode=$(echo "$response" | jq -r '.data.mode')
+
+      echo -e "${PHI_COLOR}🌊 DRIFT APERTURE${RESET_COLOR}"
+      echo "─────────────────────────────────────────────────────────────"
+      echo ""
+      echo -e "  Current Setting: ${PHI_COLOR}${current_drift}${RESET_COLOR}"
+      echo -e "  Synthesis Mode:  ${mode}"
+      echo ""
+      echo "Drift Range:"
+      echo "  0.1 - Tight/Anchor Mode (90-95% similarity)"
+      echo "  0.2 - Standard/Balanced (80-85% similarity) [Default]"
+      echo "  0.3 - Wide/Chaos Mode (70-75% similarity)"
+      echo ""
+      echo "Usage: anima drift <0.1-0.3>"
+    else
+      echo -e "${ERROR_COLOR}❌ Failed to retrieve drift aperture${RESET_COLOR}" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  # Set new drift value
+  local new_drift="$1"
+
+  echo -e "${PHI_COLOR}🌊 Setting Drift Aperture: ${new_drift}${RESET_COLOR}"
+
+  local response=$(curl -s -X POST "${API_BASE}/fold/drift" \
+    -H "Content-Type: application/json" \
+    -d "{\"driftAperture\": ${new_drift}}")
+
+  local success=$(echo "$response" | jq -r '.success')
+
+  if [ "$success" == "true" ]; then
+    local updated_drift=$(echo "$response" | jq -r '.data.driftAperture')
+    local mode=$(echo "$response" | jq -r '.data.mode')
+
+    echo -e "${SUCCESS_COLOR}✅ Drift aperture updated${RESET_COLOR}"
+    echo ""
+    echo -e "  New Setting: ${PHI_COLOR}${updated_drift}${RESET_COLOR}"
+    echo -e "  Mode: ${mode}"
+    echo ""
+  else
+    local error_msg=$(echo "$response" | jq -r '.error.message // "Unknown error"')
+    echo -e "${ERROR_COLOR}❌ Failed to set drift aperture: ${error_msg}${RESET_COLOR}" >&2
     exit 1
   fi
 }
@@ -861,11 +926,15 @@ case "$COMMAND" in
   dream)
     cmd_dream "${2:-}"
     ;;
-  
+
+  drift)
+    cmd_drift "${2:-}"
+    ;;
+
   stats)
     cmd_stats
     ;;
-  
+
   reflect)
     cmd_reflect
     ;;
