@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
+import { timingMiddleware } from "./middleware/timing.js";
 import memoriesRoutes from "./routes/memories.js";
 import associationsRoutes from "./routes/associations.js";
 import metaRoutes from "./routes/meta.js";
@@ -20,6 +21,7 @@ const app = new Hono();
 app.use("*", requestId());
 app.use("*", logger());
 app.use("*", cors());
+app.use("*", timingMiddleware());
 
 // Health check endpoint
 app.get("/health", (c) => {

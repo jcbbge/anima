@@ -5,7 +5,7 @@
  */
 
 import { Hono } from 'hono';
-import { 
+import {
   conversationEndSchema,
   getReflectionsSchema,
 } from '../schemas/memory.schema.js';
@@ -19,6 +19,8 @@ import {
   getLatestHandshake,
   getHandshakeHistory,
 } from '../services/handshakeService.js';
+import { embeddingCache } from '../services/embeddingCache.js';
+import { pool } from '../config/database.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
 const app = new Hono();
@@ -220,7 +222,7 @@ app.get('/handshake/history', async (c) => {
   try {
     const limit = parseInt(c.req.query('limit') || '10');
     const history = await getHandshakeHistory(limit);
-    
+
     return successResponse(c, {
       history: history.map(h => ({
         id: h.id,
@@ -241,6 +243,46 @@ app.get('/handshake/history', async (c) => {
       { message: error.message }
     );
   }
+});
+
+/**
+ * GET /cache-stats
+ * Get embedding cache statistics
+ */
+app.get('/cache-stats', (c) => {
+  const stats = embeddingCache.getStats();
+  return c.json({
+    cache: stats,
+    recommendation: stats.hitRate < 0.5
+      ? 'Consider increasing cache size or TTL'
+      : 'Cache performing well'
+  });
+});
+
+/**
+ * GET /metrics
+ * Get comprehensive system metrics
+ */
+app.get('/metrics', (c) => {
+  const cacheStats = embeddingCache.getStats();
+
+  return c.json({
+    cache: {
+      hits: cacheStats.hits,
+      misses: cacheStats.misses,
+      hitRate: cacheStats.hitRate.toFixed(3),
+      size: cacheStats.size,
+      maxSize: cacheStats.maxSize,
+      status: cacheStats.hitRate > 0.8 ? 'healthy' : 'warming up'
+    },
+    database: {
+      totalConnections: pool.totalCount,
+      idleConnections: pool.idleCount,
+      waitingConnections: pool.waitingCount,
+      status: pool.waitingCount > 5 ? 'under pressure' : 'healthy'
+    },
+    timestamp: new Date().toISOString()
+  });
 });
 
 export default app;
