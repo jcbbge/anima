@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { getConfig } from '../config/environment.js';
+import { embeddingCache } from './embeddingCache.js';
 
 const config = getConfig();
 
@@ -203,14 +204,29 @@ async function generateEmbedding(text, options = {}) {
     );
   }
 
+  // NEW: Check cache first
+  const cached = await embeddingCache.get(text);
+  if (cached) {
+    return {
+      embedding: cached,
+      provider: 'cache',
+      dimensions: cached.length,
+      fromCache: true
+    };
+  }
+
   // Try primary provider
   const primaryProvider = config.embedding.provider;
 
   try {
     let embedding;
-    
+
     if (primaryProvider === 'ollama') {
       embedding = await generateEmbeddingOllama(text, options);
+
+      // NEW: Cache the result
+      embeddingCache.set(text, embedding);
+
       return {
         embedding,
         provider: 'ollama',
@@ -219,6 +235,10 @@ async function generateEmbedding(text, options = {}) {
       };
     } else if (primaryProvider === 'openai') {
       embedding = await generateEmbeddingOpenAI(text, options);
+
+      // NEW: Cache the result
+      embeddingCache.set(text, embedding);
+
       return {
         embedding,
         provider: 'openai',
@@ -239,6 +259,10 @@ async function generateEmbedding(text, options = {}) {
       console.warn('Ollama failed, falling back to OpenAI:', error.message);
       try {
         const embedding = await generateEmbeddingOpenAI(text, options);
+
+        // NEW: Cache the fallback result
+        embeddingCache.set(text, embedding);
+
         return {
           embedding,
           provider: 'openai',
