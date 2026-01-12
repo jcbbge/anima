@@ -105,7 +105,7 @@ bun run test:identity
 **Scope:**
 - Scans: `/src`, `/cli`, `/scripts`, `/crucible`, root directory
 - Includes: `.js`, `.ts`, `.sql`, `.md`, `.env.example`
-- Detects: Claude, Anthropic, Gemini, OpenAI
+- Detects: Proprietary substrate vendor names (obfuscated in firewall)
 
 **Success Criteria:**
 - Zero vendor names found in entire codebase

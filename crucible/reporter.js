@@ -179,7 +179,7 @@ function generateReport(results) {
   }
   console.log('');
 
-  // Identity
+  // Identity (with blocking on violations)
   const identityStatus = identity.passed ? '✅ PASS' : '❌ FAIL';
   console.log(`🛡️  Identity (Scrub):        ${identityStatus}`);
   if (identity.violations === 0) {
@@ -187,6 +187,7 @@ function generateReport(results) {
   } else {
     console.log(`    ⚠️  Vendor tethers detected: ${identity.violations}`);
     console.log(`    ⚠️  Substrate is NOT independent`);
+    console.log(`    🚨 AGNOSTICISM FIREWALL: BLOCKING DEPLOYMENT`);
   }
   console.log('');
 
@@ -209,6 +210,19 @@ function generateReport(results) {
       console.log(`  - ${r.name}`);
     });
     console.log('');
+
+    // CRITICAL: Check for identity violations (AGNOSTICISM FIREWALL)
+    const identityResult = results.find(r => r.name === 'Identity');
+    if (identityResult && !identityResult.passed && identityResult.violations > 0) {
+      console.log('🚨 AGNOSTICISM FIREWALL ACTIVATED');
+      console.log('');
+      console.log('Identity contamination detected. The system has vendor tethers');
+      console.log('that violate the substrate independence requirement.');
+      console.log('');
+      console.log('Genesis Agnosticism Protocol: DEPLOYMENT BLOCKED');
+      console.log('');
+    }
+
     console.log('Anima cannot be considered substrate-independent');
     console.log('until all Crucible tests pass.');
   } else {
