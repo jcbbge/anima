@@ -1,0 +1,22 @@
+{
+  "name": "@anima/crucible",
+  "version": "1.0.0",
+  "description": "The Crucible: Independent Verification & Validation Harness for Anima",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:persistence": "bun traces/persistence.trace.js",
+    "test:identity": "bun test tests/identity.scrub.test.js",
+    "test:resonance": "bun test tests/resonance.math.test.js",
+    "report": "bun reporter.js"
+  },
+  "keywords": ["verification", "testing", "anima", "substrate-independence"],
+  "author": "Anima Verification Team",
+  "license": "MIT",
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}
