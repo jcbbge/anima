@@ -11,6 +11,7 @@ RUN bun install --frozen-lockfile --production
 
 # Copy application code
 COPY src ./src
+COPY crucible ./crucible
 
 # Create non-root user
 RUN addgroup -g 1001 -S bunuser && \

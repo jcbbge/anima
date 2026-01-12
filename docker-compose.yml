@@ -33,9 +33,9 @@ services:
       POSTGRES_DB: anima
       POSTGRES_USER: anima
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-anima_dev_password}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
-      OLLAMA_URL: http://ollama:11434
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CORE_EMBEDDING_PROVIDER: ${CORE_EMBEDDING_PROVIDER:-ollama}
+      CORE_ENCODER_URL: http://ollama:11434
+      SECONDARY_ENCODER_KEY: ${SECONDARY_ENCODER_KEY:-}
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
