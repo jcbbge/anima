@@ -59,7 +59,7 @@ Anima V1 is a **semantic memory system** built on three core pillars:
 │  ┌──────────────────────────────────────────┐  │
 │  │ embeddingService                          │  │
 │  │  - generateEmbedding()                    │  │
-│  │  - Ollama/OpenAI integration              │  │
+│  │  - Local/Remote substrate integration    │  │
 │  │  - Retry logic                            │  │
 │  └──────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────┐  │
@@ -132,13 +132,13 @@ Anima V1 is a **semantic memory system** built on three core pillars:
 - **Flexible**: JSONB for semi-structured data (metrics)
 - **Performant**: HNSW indexing for fast vector search
 
-### Why Ollama (default)?
+### Why Local Substrate (default)?
 
 - **Free**: No API costs
 - **Local**: No data leaving your machine
 - **Fast**: ~50ms embedding generation
 - **Quality**: nomic-embed-text performs well for this use case
-- **Fallback**: OpenAI available if needed
+- **Fallback**: Remote substrate available if needed
 
 ## Data Architecture
 
@@ -433,7 +433,7 @@ async function generateEmbedding(text, retries = 3) {
 
 **Implementation**:
 - Embedding service has retry logic
-- OpenAI fallback if Ollama unavailable
+- Remote substrate fallback if local unavailable
 - Default values for optional parameters
 - Partial results acceptable
 
@@ -451,7 +451,7 @@ async function generateEmbedding(text, retries = 3) {
 
 ### Bottlenecks
 
-1. **Embedding Generation**: ~50ms (Ollama)
+1. **Embedding Generation**: ~50ms (Local Substrate)
    - Mitigation: Deduplication reduces redundant calls
    - Future: Batch processing, caching
 

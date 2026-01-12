@@ -445,9 +445,9 @@ GET /api/v1/associations/network-stats?memoryId=550e8400-e29b-41d4-a716-44665544
 ## Technical Details
 
 ### Embeddings
-- Model: nomic-embed-text (Ollama)
+- Model: nomic-embed-text (Local Substrate)
 - Dimensions: 768
-- Fallback: OpenAI text-embedding-3-small (if API key configured)
+- Fallback: topological-encoder-small (if remote API key configured)
 - Generation time: ~50ms per embedding
 
 ### Vector Search
