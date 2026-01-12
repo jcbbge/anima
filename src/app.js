@@ -14,6 +14,7 @@ import associationsRoutes from "./routes/associations.js";
 import metaRoutes from "./routes/meta.js";
 import reflectionRoutes from "./routes/reflection.js";
 import dreamsRoutes from "./routes/dreams.js";
+import foldRoutes from "./routes/fold.js";
 
 const app = new Hono();
 
@@ -69,6 +70,11 @@ api.get("/", (c) => {
       "reflection/stats": "GET /api/v1/reflection/stats",
       "dreams/trigger": "POST /api/v1/dreams/trigger",
       "dreams/history": "GET /api/v1/dreams/history",
+      "fold/trigger": "POST /api/v1/fold/trigger",
+      "fold/store": "POST /api/v1/fold/store",
+      "fold/history": "GET /api/v1/fold/history",
+      "fold/drift": "GET /api/v1/fold/drift",
+      "fold/drift-set": "POST /api/v1/fold/drift",
     },
   });
 });
@@ -85,8 +91,11 @@ api.route("/meta", metaRoutes);
 // Mount conversation reflection routes
 api.route("/reflection", reflectionRoutes);
 
-// Mount dreams routes (The Fold - REM synthesis)
+// Mount dreams routes (The Fold - REM synthesis - Legacy)
 api.route("/dreams", dreamsRoutes);
+
+// Mount fold routes (The Fold V2.1 - Harmonic Synthesis)
+api.route("/fold", foldRoutes);
 
 // Mount API routes
 app.route("/api/v1", api);
