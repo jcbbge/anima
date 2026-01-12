@@ -1,6 +1,6 @@
 /**
  * Environment Configuration and Validation
- * 
+ *
  * Validates required environment variables and provides defaults.
  * Exits with error if critical variables are missing.
  */
@@ -27,8 +27,9 @@ const DEFAULTS = {
   POSTGRES_PORT: '7101',
   POSTGRES_DB: 'anima',
   POSTGRES_USER: 'anima',
-  EMBEDDING_PROVIDER: 'ollama',
-  OLLAMA_URL: 'http://localhost:7102',
+  // Substrate encoder configuration (backward compatible)
+  CORE_EMBEDDING_PROVIDER: process.env.CORE_EMBEDDING_PROVIDER || process.env.EMBEDDING_PROVIDER || 'local',
+  CORE_ENCODER_URL: process.env.CORE_ENCODER_URL || process.env.CORE_ENCODER_URL || 'http://localhost:7102',
   LOG_LEVEL: 'info',
   ENABLE_SEMANTIC_CONSOLIDATION: 'true',
 };
@@ -39,7 +40,7 @@ const DEFAULTS = {
  */
 function validateEnvironment() {
   const missing = [];
-  
+
   // Check required variables
   for (const varName of REQUIRED_VARS) {
     if (!process.env[varName]) {
@@ -56,10 +57,13 @@ function validateEnvironment() {
     process.exit(1);
   }
 
-  // Validate EMBEDDING_PROVIDER specific requirements
-  if (process.env.EMBEDDING_PROVIDER === 'openai' && !process.env.OPENAI_API_KEY) {
-    console.error('❌ OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai');
-    console.error('   Set OPENAI_API_KEY in your .env file or switch to EMBEDDING_PROVIDER=ollama');
+  // Validate substrate encoder requirements
+  const primaryEncoder = process.env.CORE_EMBEDDING_PROVIDER || process.env.EMBEDDING_PROVIDER;
+  const secondaryKey = process.env.SECONDARY_ENCODER_KEY || process.env.SECONDARY_ENCODER_KEY;
+
+  if (primaryEncoder === 'remote' && !secondaryKey) {
+    console.error('❌ SECONDARY_ENCODER_KEY is required when CORE_EMBEDDING_PROVIDER=remote');
+    console.error('   Set SECONDARY_ENCODER_KEY in your .env file or switch to CORE_EMBEDDING_PROVIDER=local');
     process.exit(1);
   }
 
@@ -80,7 +84,7 @@ function getConfig() {
     // Node environment
     nodeEnv: process.env.NODE_ENV,
     port: parseInt(process.env.PORT, 10),
-    
+
     // Database
     database: {
       host: process.env.POSTGRES_HOST,
@@ -89,12 +93,12 @@ function getConfig() {
       user: process.env.POSTGRES_USER,
       password: process.env.POSTGRES_PASSWORD,
     },
-    
-    // Embedding provider
+
+    // Substrate encoder (backward compatible)
     embedding: {
-      provider: process.env.EMBEDDING_PROVIDER,
-      ollamaUrl: process.env.OLLAMA_URL,
-      openaiApiKey: process.env.OPENAI_API_KEY,
+      provider: process.env.CORE_EMBEDDING_PROVIDER || process.env.EMBEDDING_PROVIDER || 'local',
+      encoderUrl: process.env.CORE_ENCODER_URL,
+      secondaryKey: process.env.SECONDARY_ENCODER_KEY,
     },
 
     // Logging
@@ -112,14 +116,14 @@ function getConfig() {
  */
 function displayConfig() {
   const config = getConfig();
-  
+
   console.log('🔧 Configuration:');
   console.log(`   Environment: ${config.nodeEnv}`);
   console.log(`   Port: ${config.port}`);
   console.log(`   Database: ${config.database.host}:${config.database.port}/${config.database.database}`);
-  console.log(`   Embedding Provider: ${config.embedding.provider}`);
-  if (config.embedding.provider === 'ollama') {
-    console.log(`   Ollama URL: ${config.embedding.ollamaUrl}`);
+  console.log(`   Primary Substrate: ${config.embedding.provider}`);
+  if (config.embedding.provider === 'local' && config.embedding.encoderUrl) {
+    console.log(`   Encoder URL: ${config.embedding.encoderUrl}`);
   }
   console.log(`   Log Level: ${config.logLevel}`);
   console.log('');
