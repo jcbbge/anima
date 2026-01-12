@@ -55,7 +55,7 @@ curl http://localhost:7100/health
 The setup script will:
 - Install Bun if not present
 - Install dependencies
-- Start Docker services (PostgreSQL, Ollama)
+- Start Docker services (PostgreSQL, local substrate)
 - Create database schema
 - Generate `.env` file
 
@@ -63,7 +63,7 @@ The setup script will:
 
 - **API Server**: `http://localhost:7100`
 - **PostgreSQL**: `localhost:7101`
-- **Ollama**: `localhost:7102`
+- **Local Substrate**: `localhost:7102`
 
 ## Making Changes
 

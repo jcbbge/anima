@@ -197,7 +197,7 @@ docker exec anima-postgres psql -U postgres -d anima -c "DROP INDEX IF EXISTS id
 ## Architecture Changes
 
 ### Before
-- ❌ No embedding cache → Every operation calls Ollama (2-5s)
+- ❌ No embedding cache → Every operation calls remote substrate (2-5s)
 - ❌ Sequential DB operations → 190 queries for co-occurrence
 - ❌ Per-memory updates → 40-60 round trips
 - ❌ Blocking semantic consolidation → 1-3s table scans

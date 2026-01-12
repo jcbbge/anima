@@ -186,14 +186,14 @@ Comprehensive system metrics:
 ### Before (Slow) ❌
 ```
 Add Memory:
-  1. Generate embedding → 2-5s (Ollama call)
+  1. Generate embedding → 2-5s (substrate call)
   2. Semantic scan → 1-3s (full table scan)
   3. Hash check → 50ms
   4. Insert → 50ms
   TOTAL: 3-8 seconds
 
 Query:
-  1. Generate embedding → 2-5s (Ollama call)
+  1. Generate embedding → 2-5s (substrate call)
   2. Vector search → 200ms
   3. 40-60 individual updates → 4-6s
   4. 190 co-occurrence inserts → 4-9s
@@ -277,7 +277,7 @@ docker logs anima-api | grep POOL
 ### "Queries still slow"
 Check if:
 1. Cache is warming up (check hit rate)
-2. Ollama is running: `docker ps | grep ollama`
+2. Local substrate is running: `docker ps | grep substrate`
 3. Database indexes applied: See "Database Indexes" section below
 
 ### "Connection pool exhausted"
@@ -377,7 +377,7 @@ After 24 hours, you should see:
 
 ## Questions?
 
-- **Cache not warming up?** Check if embedding service (Ollama) is running
+- **Cache not warming up?** Check if embedding service (locally-hosted model service) is running
 - **Still seeing slowness?** Check logs: `docker logs anima-api -f`
 - **Want to dig deeper?** See `IMPLEMENTATION_COMPLETE.md` for technical details
 

@@ -19,7 +19,7 @@ During dogfooding, response times are **5-30 seconds**:
 
 ### 1. Embedding Service - No Caching
 **Location**: `src/services/embeddingService.js:190-265`
-- Every operation calls Ollama/OpenAI (2-5s)
+- Every operation calls remote substrate (2-5s)
 - With retries: up to 20+ seconds
 - **Impact**: 85% of add operation time
 
@@ -164,29 +164,29 @@ async function generateEmbedding(text, options = {}) {
   try {
     let embedding;
 
-    if (primaryProvider === 'ollama') {
-      embedding = await generateEmbeddingOllama(text, options);
+    if (primaryProvider === 'local') {
+      embedding = await generateEmbeddingLocal(text, options);
 
       // NEW: Cache the result
       embeddingCache.set(text, embedding);
 
       return {
         embedding,
-        provider: 'ollama',
+        provider: 'local',
         dimensions: embedding.length,
         model: 'nomic-embed-text',
       };
-    } else if (primaryProvider === 'openai') {
-      embedding = await generateEmbeddingOpenAI(text, options);
+    } else if (primaryProvider === 'remote_alpha') {
+      embedding = await generateEmbeddingRemoteAlpha(text, options);
 
       // NEW: Cache the result
       embeddingCache.set(text, embedding);
 
       return {
         embedding,
-        provider: 'openai',
+        provider: 'remote_alpha',
         dimensions: embedding.length,
-        model: 'text-embedding-3-small',
+        model: 'topological-encoder-small',
       };
     }
     // ... rest of existing code

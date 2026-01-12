@@ -30,7 +30,7 @@ Traditional memory systems optimize for information density. Anima optimizes for
 - **Runtime**: Bun 1.3.5+ (modern JavaScript runtime)
 - **Framework**: Hono 4.11+ (ultra-fast edge-compatible web framework)
 - **Database**: PostgreSQL 16 + pgvector 0.8.1 (vector similarity search)
-- **Embeddings**: Ollama (nomic-embed-text, 768 dimensions) or OpenAI API
+- **Embeddings**: Local Substrate (nomic-embed-text, 768 dimensions) or Substrate Alpha API
 - **Validation**: Zod 4.3+ (type-safe schema validation)
 - **Deployment**: Docker Compose (single-command setup)
 
@@ -38,7 +38,7 @@ Traditional memory systems optimize for information density. Anima optimizes for
 
 ### Prerequisites
 
-- **Docker Desktop**: For PostgreSQL and Ollama containers
+- **Docker Desktop**: For PostgreSQL and local substrate containers
 - **Bun**: JavaScript runtime (auto-installed by setup script if missing)
 
 ### Installation
@@ -88,7 +88,7 @@ curl -X POST http://localhost:7100/api/v1/memories/query \
 
 ### ✅ Phase 0: Infrastructure Setup (COMPLETE)
 
-- ✅ Docker Compose with PostgreSQL + pgvector + Ollama
+- ✅ Docker Compose with PostgreSQL + pgvector + Local Substrate
 - ✅ Database schema with 4 tables and HNSW vector indexes
 - ✅ Bun + Hono API server with middleware
 - ✅ Environment configuration with Zod validation
@@ -370,12 +370,12 @@ PORT=7100
 NODE_ENV=development
 LOG_LEVEL=info
 
-# Embedding Provider (ollama or openai)
-EMBEDDING_PROVIDER=ollama
-OLLAMA_URL=http://localhost:7102
+# Embedding Provider (local or remote_alpha)
+EMBEDDING_PROVIDER=local
+LOCAL_SUBSTRATE_URL=http://localhost:7102
 
-# OpenAI (only if EMBEDDING_PROVIDER=openai)
-# OPENAI_API_KEY=sk-your-key-here
+# Remote Substrate Alpha (only if EMBEDDING_PROVIDER=remote_alpha)
+# REMOTE_ALPHA_API_KEY=sk-your-key-here
 ```
 
 ## Performance
