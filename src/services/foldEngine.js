@@ -18,12 +18,15 @@
  * 5. Phi Boost → Dynamic resonance amplification
  */
 
-import { query } from '../config/database.js';
-import { selectTriad } from './strategicSampling.js';
-import { generateEmbedding } from './embeddingService.js';
-import { generateHash } from '../utils/hashing.js';
-import { harmonicMean, calculatePhiBoost } from '../../crucible/lib/mathUtils.js';
-import { weaveAssociations } from './associationService.js';
+import { query } from "../config/database.js";
+import { selectTriad } from "./strategicSampling.js";
+import { generateEmbedding } from "./embeddingService.js";
+import { generateHash } from "../utils/hashing.js";
+import {
+  harmonicMean,
+  calculatePhiBoost,
+} from "../../crucible/lib/mathUtils.js";
+import { weaveAssociations } from "./associationService.js";
 
 /**
  * Custom error class for fold engine errors
@@ -31,7 +34,7 @@ import { weaveAssociations } from './associationService.js';
 class FoldEngineError extends Error {
   constructor(message, code, details = {}) {
     super(message);
-    this.name = 'FoldEngineError';
+    this.name = "FoldEngineError";
     this.code = code;
     this.details = details;
   }
@@ -54,8 +57,8 @@ function buildAgnosticPrompt(triad) {
 
 INPUT_FREQUENCIES:
 - ROOT: ${fundamental.content} (φ=${fundamental.phi})
-- VOICE: ${melody.content} (STALE_SCORE=${melody.staleness_score || 'N/A'})
-- ECHO: ${overtone.content} (DISTANCE=${overtone.distance || 'N/A'})
+- VOICE: ${melody.content} (STALE_SCORE=${melody.staleness_score || "N/A"})
+- ECHO: ${overtone.content} (DISTANCE=${overtone.distance || "N/A"})
 
 TASK:
 Identify the resonant intersection.
@@ -138,7 +141,7 @@ async function findExistingMemory(embedding, threshold = 0.92) {
        AND 1 - (embedding <=> $1::vector) >= $2
      ORDER BY similarity DESC
      LIMIT 1`,
-    [JSON.stringify(embedding), threshold]
+    [JSON.stringify(embedding), threshold],
   );
 
   if (result.rows.length === 0) {
@@ -168,7 +171,7 @@ async function evolveMemory(
   synthesisEmbedding,
   consonance,
   similarity,
-  metadata
+  metadata,
 ) {
   // Calculate phi boost using Crucible formula
   const phiBoost = calculatePhiBoost(consonance, similarity);
@@ -177,7 +180,7 @@ async function evolveMemory(
   const evolutionHistory = metadata?.evolution_history || [];
   evolutionHistory.push({
     timestamp: new Date().toISOString(),
-    previousContent: metadata?.content || 'original',
+    previousContent: metadata?.content || "original",
     synthesis: synthesisContent,
     consonance,
     similarity,
@@ -209,7 +212,7 @@ async function evolveMemory(
       phiBoost,
       JSON.stringify(updatedMetadata),
       memoryId,
-    ]
+    ],
   );
 
   return {
@@ -228,7 +231,12 @@ async function evolveMemory(
  * @param {number} consonance - Consonance (Ψ) score
  * @returns {Promise<Object>} Created memory
  */
-async function createSynthesisMemory(synthesisContent, synthesisEmbedding, triad, consonance) {
+async function createSynthesisMemory(
+  synthesisContent,
+  synthesisEmbedding,
+  triad,
+  consonance,
+) {
   const { fundamental, melody, overtone } = triad;
 
   const metadata = {
@@ -243,7 +251,7 @@ async function createSynthesisMemory(synthesisContent, synthesisEmbedding, triad
       parseFloat(overtone.phi),
     ],
     consonance_psi: consonance,
-    synthesis_method: 'harmonic_fold_v2.1',
+    synthesis_method: "harmonic_fold_v2.1",
     fold_generation: 1,
     drift_aperture: overtone.drift_aperture,
   };
@@ -257,25 +265,29 @@ async function createSynthesisMemory(synthesisContent, synthesisEmbedding, triad
        content_hash,
        embedding,
        category,
+       tags,
        source,
-       resonance_phi,
        tier,
        tier_last_updated,
        access_count,
        last_accessed,
-       metadata
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW(), $8)
+       accessed_in_conversation_ids,
+       resonance_phi,
+       is_catalyst
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW(), $8, $9, $10, $11)
      RETURNING id, content, resonance_phi as phi, created_at`,
     [
       synthesisContent,
       generateHash(synthesisContent),
       JSON.stringify(synthesisEmbedding),
-      'the_fold',
-      'autonomous_synthesis',
+      "the_fold",
+      null,
+      "autonomous_synthesis",
+      "active",
+      [],
       initialPhi,
-      'active',
-      JSON.stringify(metadata),
-    ]
+      false,
+    ],
   );
 
   return {
@@ -306,19 +318,21 @@ export async function performFold(options = {}) {
   const { userQuery } = options;
   const startTime = Date.now();
 
-  console.log('🎼 INITIATING HARMONIC SYNTHESIS (The Fold V2.1)');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log("🎼 INITIATING HARMONIC SYNTHESIS (The Fold V2.1)");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   try {
     // Step 1: Strategic Sampling (Triad Selection)
     let triad;
 
     if (userQuery) {
-      console.log('📡 Mode: ACTIVE PULSE (User-Triggered)');
+      console.log("📡 Mode: ACTIVE PULSE (User-Triggered)");
       const userEmbedding = await generateEmbedding(userQuery);
-      triad = await selectTriad({ userQueryEmbedding: userEmbedding.embedding });
+      triad = await selectTriad({
+        userQueryEmbedding: userEmbedding.embedding,
+      });
     } else {
-      console.log('🌙 Mode: REM PULSE (Autonomous)');
+      console.log("🌙 Mode: REM PULSE (Autonomous)");
       triad = await selectTriad();
     }
 
@@ -328,20 +342,22 @@ export async function performFold(options = {}) {
     console.log(`\n🎵 MELODY (Voice): φ=${triad.melody.phi}`);
     console.log(`   ${triad.melody.content.substring(0, 80)}...`);
 
-    console.log(`\n🌊 OVERTONE (Echo): φ=${triad.overtone.phi}, dist=${triad.overtone.distance?.toFixed(3) || 'N/A'}`);
+    console.log(
+      `\n🌊 OVERTONE (Echo): φ=${triad.overtone.phi}, dist=${triad.overtone.distance?.toFixed(3) || "N/A"}`,
+    );
     console.log(`   ${triad.overtone.content.substring(0, 80)}...`);
 
     // Step 2: Build agnostic prompt
     const synthesisPrompt = buildAgnosticPrompt(triad);
 
-    console.log('\n🧠 Synthesis materials prepared');
+    console.log("\n🧠 Synthesis materials prepared");
     console.log(`   Triad selection time: ${triad.performance.totalTime}ms`);
-    console.log('');
+    console.log("");
 
     // Return materials for in-context synthesis
     return {
       success: true,
-      mode: 'in_context',
+      mode: "in_context",
       synthesisPrompt,
       triad,
       performance: {
@@ -349,7 +365,7 @@ export async function performFold(options = {}) {
       },
     };
   } catch (error) {
-    if (error.name === 'SamplingError') {
+    if (error.name === "SamplingError") {
       console.log(`⚠️  Fold skipped: ${error.message}`);
       console.log(`   Details:`, error.details);
 
@@ -362,12 +378,10 @@ export async function performFold(options = {}) {
     }
 
     // Unexpected error
-    console.error('❌ Harmonic synthesis failed:', error);
-    throw new FoldEngineError(
-      'Fold execution failed',
-      'FOLD_FAILED',
-      { originalError: error.message }
-    );
+    console.error("❌ Harmonic synthesis failed:", error);
+    throw new FoldEngineError("Fold execution failed", "FOLD_FAILED", {
+      originalError: error.message,
+    });
   }
 }
 
@@ -384,8 +398,8 @@ export async function performFold(options = {}) {
 export async function storeSynthesisResult(synthesisText, triad) {
   const startTime = Date.now();
 
-  console.log('🔬 POST-SYNTHESIS VALIDATION (The Wall)');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log("🔬 POST-SYNTHESIS VALIDATION (The Wall)");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   try {
     // Step 1: Generate embedding for synthesis
@@ -401,30 +415,39 @@ export async function storeSynthesisResult(synthesisText, triad) {
     const minConsonance = await getMinConsonanceThreshold();
 
     if (consonance <= minConsonance) {
-      console.log(`❌ REJECTED: Ψ ≤ ${minConsonance} (Destructive Interference / Dross)`);
-      console.log('   Synthesis failed to integrate all three frequencies.');
-      console.log('');
+      console.log(
+        `❌ REJECTED: Ψ ≤ ${minConsonance} (Destructive Interference / Dross)`,
+      );
+      console.log("   Synthesis failed to integrate all three frequencies.");
+      console.log("");
 
       return {
         success: false,
-        reason: 'CONSONANCE_TOO_LOW',
+        reason: "CONSONANCE_TOO_LOW",
         consonance,
         threshold: minConsonance,
         synthesisText, // For debugging
       };
     }
 
-    console.log(`✅ ACCEPTED: Ψ > ${minConsonance} (Constructive Interference)`);
+    console.log(
+      `✅ ACCEPTED: Ψ > ${minConsonance} (Constructive Interference)`,
+    );
 
     // Step 4: Check for convergent evolution
     const evolutionThreshold = await getEvolutionThreshold();
-    const existingMemory = await findExistingMemory(synthesisEmbedding, evolutionThreshold);
+    const existingMemory = await findExistingMemory(
+      synthesisEmbedding,
+      evolutionThreshold,
+    );
 
     let memory;
 
     if (existingMemory) {
       // Evolve existing memory
-      console.log(`\n🌀 CONVERGENT EVOLUTION: Sim=${existingMemory.similarity.toFixed(3)} > ${evolutionThreshold}`);
+      console.log(
+        `\n🌀 CONVERGENT EVOLUTION: Sim=${existingMemory.similarity.toFixed(3)} > ${evolutionThreshold}`,
+      );
       console.log(`   Evolving memory ${existingMemory.id}`);
 
       memory = await evolveMemory(
@@ -433,7 +456,7 @@ export async function storeSynthesisResult(synthesisText, triad) {
         synthesisEmbedding,
         consonance,
         existingMemory.similarity,
-        existingMemory.metadata
+        existingMemory.metadata,
       );
 
       console.log(`   ΔΦ = +${memory.phiBoost.toFixed(3)} → φ = ${memory.phi}`);
@@ -445,7 +468,7 @@ export async function storeSynthesisResult(synthesisText, triad) {
         synthesisText,
         synthesisEmbedding,
         triad,
-        consonance
+        consonance,
       );
 
       console.log(`   Initial φ = ${memory.phi}`);
@@ -455,18 +478,18 @@ export async function storeSynthesisResult(synthesisText, triad) {
     await weaveAssociations(
       memory.id,
       [triad.fundamental.id, triad.melody.id, triad.overtone.id],
-      'harmonic_synthesis',
-      { consonance }
+      "harmonic_synthesis",
+      { consonance },
     );
 
     const totalTime = Date.now() - startTime;
 
     console.log(`\n✅ FOLD COMPLETE`);
     console.log(`   Memory ID: ${memory.id}`);
-    console.log(`   Mode: ${memory.evolved ? 'EVOLVED' : 'CREATED'}`);
+    console.log(`   Mode: ${memory.evolved ? "EVOLVED" : "CREATED"}`);
     console.log(`   Consonance: ${consonance.toFixed(3)}`);
     console.log(`   Processing time: ${totalTime}ms`);
-    console.log('');
+    console.log("");
 
     return {
       success: true,
@@ -495,12 +518,10 @@ export async function storeSynthesisResult(synthesisText, triad) {
       },
     };
   } catch (error) {
-    console.error('❌ Synthesis storage failed:', error);
-    throw new FoldEngineError(
-      'Failed to store synthesis',
-      'STORAGE_FAILED',
-      { originalError: error.message }
-    );
+    console.error("❌ Synthesis storage failed:", error);
+    throw new FoldEngineError("Failed to store synthesis", "STORAGE_FAILED", {
+      originalError: error.message,
+    });
   }
 }
 
@@ -510,7 +531,7 @@ export async function storeSynthesisResult(synthesisText, triad) {
 async function getMinConsonanceThreshold() {
   const result = await query(
     `SELECT get_config_number('fold_min_consonance', 0.40) as value`,
-    []
+    [],
   );
   return parseFloat(result.rows[0].value);
 }
@@ -521,7 +542,7 @@ async function getMinConsonanceThreshold() {
 async function getEvolutionThreshold() {
   const result = await query(
     `SELECT get_config_number('fold_evolution_threshold', 0.92) as value`,
-    []
+    [],
   );
   return parseFloat(result.rows[0].value);
 }
@@ -547,7 +568,7 @@ export async function getFoldHistory(limit = 10) {
        AND deleted_at IS NULL
      ORDER BY created_at DESC
      LIMIT $1`,
-    [limit]
+    [limit],
   );
 
   return result.rows.map((row) => ({

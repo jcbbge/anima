@@ -309,16 +309,22 @@ async function recordCoOccurrences(memoryIds, conversationId) {
   for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
     const batch = pairs.slice(i, i + BATCH_SIZE);
 
-    // Build VALUES clause: ($1,$2,$3), ($4,$5,$6), ...
+    // Build VALUES clause: ($1,$2,$3,$4,$5), ($6,$7,$8,$9,$10), ...
     const values = batch
       .map((_, idx) => {
-        const offset = idx * 3;
-        return `($${offset + 1}, $${offset + 2}, $${offset + 3})`;
+        const offset = idx * 5;
+        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
       })
       .join(",");
 
-    // Flatten params: [id1, id2, convId, id3, id4, convId, ...]
-    const params = batch.flatMap(([idA, idB]) => [idA, idB, conversationId]);
+    // Flatten params: [id1, id2, 1, 1.0, [convId], id3, id4, 1, 1.0, [convId], ...]
+    const params = batch.flatMap(([idA, idB]) => [
+      idA,
+      idB,
+      1, // co_occurrence_count
+      1.0, // strength
+      [conversationId], // conversation_contexts
+    ]);
 
     await query(
       `
