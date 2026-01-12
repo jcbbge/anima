@@ -49,40 +49,10 @@ export async function addMemory(memoryData) {
   const { content, category, tags, source, isCatalyst = false } = memoryData;
   const config = getConfig();
 
-  // Step 1: Generate content hash for syntactic deduplication
   const contentHash = generateHash(content);
+  const embeddingResult = await generateEmbedding(content); // Uses cache!
 
-  // Step 2: Generate embedding (needed for both semantic check and insert)
-  const embeddingResult = await generateEmbedding(content);
-
-  // Step 3: SEMANTIC DEDUPLICATION (if enabled)
-  // Check for semantically identical memories BEFORE hash check
-  // This prevents φ fragmentation across semantic variants
-  if (config.features.semanticConsolidation) {
-    try {
-      const semanticMatch = await findSemanticDuplicate(embeddingResult.embedding);
-
-      if (semanticMatch) {
-        // CONSOLIDATE: Merge into existing semantic centroid
-        const consolidationResult = await mergeIntoSemanticCentroid(
-          semanticMatch.id,
-          content,
-          isCatalyst,
-          semanticMatch.similarity
-        );
-
-        return {
-          ...consolidationResult,
-          embeddingProvider: embeddingResult.provider,
-        };
-      }
-    } catch (error) {
-      // Log error but don't fail memory creation
-      console.error('⚠️  Semantic consolidation failed, falling back to normal insert:', error.message);
-    }
-  }
-
-  // Step 4: Syntactic deduplication (exact hash match fallback)
+  // Syntactic deduplication check (fast hash lookup)
   const existingResult = await query(
     `SELECT id, content, content_hash, tier, access_count, created_at, updated_at
      FROM memories
@@ -92,8 +62,6 @@ export async function addMemory(memoryData) {
 
   if (existingResult.rows.length > 0) {
     const existing = existingResult.rows[0];
-
-    // Increment access count for exact duplicate
     await query(
       `UPDATE memories
        SET access_count = access_count + 1,
@@ -104,33 +72,20 @@ export async function addMemory(memoryData) {
     );
 
     return {
-      memory: {
-        ...existing,
-        access_count: existing.access_count + 1,
-      },
+      memory: { ...existing, access_count: existing.access_count + 1 },
       isDuplicate: true,
       exactMatch: true,
       embeddingProvider: embeddingResult.provider,
     };
   }
 
-  // Step 5: CREATE NEW MEMORY (no semantic or syntactic match found)
+  // Insert new memory
   const initialPhi = isCatalyst ? 1.0 : 0.0;
-
   const insertResult = await query(
     `INSERT INTO memories (
-      content,
-      content_hash,
-      embedding,
-      category,
-      tags,
-      source,
-      tier,
-      tier_last_updated,
-      access_count,
-      last_accessed,
-      resonance_phi,
-      is_catalyst
+      content, content_hash, embedding, category, tags, source,
+      tier, tier_last_updated, access_count, last_accessed,
+      resonance_phi, is_catalyst
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 0, NOW(), $8, $9)
     RETURNING
       id, content, content_hash, tier, category, tags, source,
@@ -142,7 +97,7 @@ export async function addMemory(memoryData) {
       category || null,
       tags || null,
       source || null,
-      "active", // New memories start in active tier
+      "active",
       initialPhi,
       isCatalyst,
     ],
@@ -150,13 +105,19 @@ export async function addMemory(memoryData) {
 
   const memory = insertResult.rows[0];
 
-  // Check for potential catalyst if not explicitly marked
+  // NEW: Async semantic consolidation (fire-and-forget)
+  if (config.features.semanticConsolidation) {
+    checkSemanticDuplicateAsync(memory.id, embeddingResult.embedding)
+      .catch(err => {
+        console.error(`Semantic consolidation failed for memory ${memory.id}:`, err);
+      });
+  }
+
+  // Async catalyst detection
   if (!isCatalyst) {
-    const catalystDetection = await detectPotentialCatalyst(memory.id);
-    if (catalystDetection.isPotentialCatalyst) {
-      console.log(`⚡ Potential catalyst detected: ${memory.id}`);
-      console.log(`   Reasons: ${catalystDetection.reasons.join(", ")}`);
-    }
+    detectPotentialCatalyst(memory.id).catch(err => {
+      console.error('Catalyst detection failed:', err);
+    });
   }
 
   return {
@@ -228,58 +189,79 @@ export async function queryMemories(queryData) {
 
   const promotions = [];
 
-  // Update access tracking for returned memories
+  // NEW: Batch update access tracking
   if (result.rows.length > 0) {
     const memoryIds = result.rows.map((row) => row.id);
 
+    // 1. BATCH UPDATE: Access count + resonance (single query)
     const updateSql = conversationId
-      ? `UPDATE memories 
+      ? `UPDATE memories
          SET access_count = access_count + 1,
              last_accessed = NOW(),
+             resonance_phi = LEAST(resonance_phi + 0.1, 5.0),
              accessed_in_conversation_ids = array_append(
                COALESCE(accessed_in_conversation_ids, ARRAY[]::TEXT[]),
                $2
              ),
              updated_at = NOW()
          WHERE id = ANY($1)`
-      : `UPDATE memories 
+      : `UPDATE memories
          SET access_count = access_count + 1,
              last_accessed = NOW(),
+             resonance_phi = LEAST(resonance_phi + 0.1, 5.0),
              updated_at = NOW()
          WHERE id = ANY($1)`;
 
-    const updateParams = conversationId
-      ? [memoryIds, conversationId]
-      : [memoryIds];
-
+    const updateParams = conversationId ? [memoryIds, conversationId] : [memoryIds];
     await query(updateSql, updateParams);
 
-    // Update resonance and check for promotions
-    for (const memory of result.rows) {
-      // Adjust resonance (normal access: +0.1 phi)
-      await adjustResonance(memory.id, false);
+    // 2. BATCH CHECK: Find promotion candidates (single query)
+    const promotionCheckSql = `
+      SELECT id, access_count, tier
+      FROM memories
+      WHERE id = ANY($1)
+        AND (
+          (tier = 'active' AND access_count + 1 >= 5) OR
+          (tier = 'thread' AND access_count + 1 >= 20)
+        )
+    `;
+    const promotionCandidates = await query(promotionCheckSql, [memoryIds]);
 
-      const newAccessCount = memory.access_count + 1;
-      const promotionResult = await checkAndPromote(
-        memory.id,
-        newAccessCount,
-        memory.tier,
-      );
+    // 3. BATCH PROMOTE: Eligible memories (single query)
+    if (promotionCandidates.rows.length > 0) {
+      const candidateIds = promotionCandidates.rows.map(r => r.id);
+      const promotionSql = `
+        UPDATE memories
+        SET tier = CASE
+          WHEN tier = 'active' AND access_count >= 5 THEN 'thread'
+          WHEN tier = 'thread' AND access_count >= 20 THEN 'stable'
+          ELSE tier
+        END,
+        tier_last_updated = NOW()
+        WHERE id = ANY($1)
+        RETURNING id, tier
+      `;
+      const promotionResult = await query(promotionSql, [candidateIds]);
 
-      if (promotionResult.promoted) {
-        promotions.push({
-          memoryId: memory.id,
-          fromTier: memory.tier,
-          toTier: promotionResult.result.memory.tier,
-        });
-        // Update the memory object in results with new tier
-        memory.tier = promotionResult.result.memory.tier;
-      }
+      promotions.push(...promotionResult.rows.map(row => ({
+        memoryId: row.id,
+        toTier: row.tier
+      })));
+
+      // Update result rows with new tier
+      result.rows.forEach(memory => {
+        const promotion = promotionResult.rows.find(p => p.id === memory.id);
+        if (promotion) {
+          memory.tier = promotion.tier;
+        }
+      });
     }
 
-    // Record co-occurrences between memories that appeared together
+    // 4. ASYNC CO-OCCURRENCE: Don't block response
     if (result.rows.length > 1 && conversationId) {
-      await recordCoOccurrences(memoryIds, conversationId);
+      recordCoOccurrences(memoryIds, conversationId).catch(err => {
+        console.error('Co-occurrence recording failed:', err);
+      });
     }
   }
 
@@ -294,13 +276,14 @@ export async function queryMemories(queryData) {
 }
 
 /**
- * Record co-occurrences between memories
+ * Record co-occurrences between memories (BATCHED)
+ * Replaces 190 sequential queries with 1 batch INSERT
  *
  * @param {string[]} memoryIds - Memory IDs that appeared together
  * @param {string} conversationId - Conversation ID
  */
 async function recordCoOccurrences(memoryIds, conversationId) {
-  // Create pairs (only record once per pair, ordered by ID)
+  // Create pairs (same algorithm)
   const pairs = [];
   for (let i = 0; i < memoryIds.length; i++) {
     for (let j = i + 1; j < memoryIds.length; j++) {
@@ -309,27 +292,41 @@ async function recordCoOccurrences(memoryIds, conversationId) {
     }
   }
 
-  // Insert or update associations
-  for (const [idA, idB] of pairs) {
-    await query(
-      `INSERT INTO memory_associations (
-        memory_a_id, 
-        memory_b_id, 
+  if (pairs.length === 0) return;
+
+  // NEW: Batch INSERT with safety limit
+  const BATCH_SIZE = 1000; // PostgreSQL param limit: 65535 / 3 params per row
+
+  for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+    const batch = pairs.slice(i, i + BATCH_SIZE);
+
+    // Build VALUES clause: ($1,$2,$3), ($4,$5,$6), ...
+    const values = batch.map((_, idx) => {
+      const offset = idx * 3;
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3})`;
+    }).join(',');
+
+    // Flatten params: [id1, id2, convId, id3, id4, convId, ...]
+    const params = batch.flatMap(([idA, idB]) => [idA, idB, conversationId]);
+
+    await query(`
+      INSERT INTO memory_associations (
+        memory_a_id,
+        memory_b_id,
         co_occurrence_count,
         strength,
         conversation_contexts
-      ) VALUES ($1, $2, 1, 1.0, ARRAY[$3])
+      ) VALUES ${values}
       ON CONFLICT (memory_a_id, memory_b_id) DO UPDATE SET
         co_occurrence_count = memory_associations.co_occurrence_count + 1,
         strength = LOG(1 + memory_associations.co_occurrence_count + 1) / 10.0,
         last_co_occurred_at = NOW(),
         conversation_contexts = array_append(
           memory_associations.conversation_contexts,
-          $3
+          EXCLUDED.conversation_contexts[1]
         ),
-        updated_at = NOW()`,
-      [idA, idB, conversationId],
-    );
+        updated_at = NOW()
+    `, params);
   }
 }
 
@@ -353,98 +350,129 @@ export async function loadBootstrap(bootstrapData) {
     includeStable = true,
   } = bootstrapData;
 
+  // Calculate tier limits
+  const activeLimit = includeActive ? 999999 : 0; // All active
+  let remaining = limit;
+  const threadLimit = includeThread ? Math.ceil(remaining * 0.7) : 0;
+  const stableLimit = includeStable ? Math.floor(remaining * 0.3) : 0;
+
+  // NEW: Single query with window functions
+  const sql = `
+    WITH tier_limits AS (
+      SELECT
+        ${activeLimit}::int as active_limit,
+        ${threadLimit}::int as thread_limit,
+        ${stableLimit}::int as stable_limit
+    ),
+    ranked_memories AS (
+      SELECT
+        id, content, tier, category, tags, source,
+        access_count, resonance_phi, is_catalyst, created_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY tier
+          ORDER BY
+            CASE tier
+              WHEN 'active' THEN last_accessed
+              ELSE resonance_phi
+            END DESC
+        ) as rn
+      FROM memories
+      WHERE deleted_at IS NULL
+        AND tier IN ('active', 'thread', 'stable')
+    )
+    SELECT
+      id, content, tier, category, tags, source,
+      access_count, resonance_phi, is_catalyst, created_at
+    FROM ranked_memories, tier_limits
+    WHERE
+      (tier = 'active' AND ${includeActive} AND rn <= tier_limits.active_limit) OR
+      (tier = 'thread' AND ${includeThread} AND rn <= tier_limits.thread_limit) OR
+      (tier = 'stable' AND ${includeStable} AND rn <= tier_limits.stable_limit)
+    ORDER BY
+      CASE tier
+        WHEN 'active' THEN 1
+        WHEN 'thread' THEN 2
+        WHEN 'stable' THEN 3
+      END,
+      resonance_phi DESC
+  `;
+
+  const result = await query(sql, []);
+
+  // Group by tier
   const memories = {
-    active: [],
-    thread: [],
-    stable: [],
+    active: result.rows.filter(m => m.tier === 'active'),
+    thread: result.rows.filter(m => m.tier === 'thread'),
+    stable: result.rows.filter(m => m.tier === 'stable'),
   };
 
-  let remaining = limit;
-
-  // Load all active tier memories first
-  if (includeActive) {
-    const activeResult = await query(
-      `SELECT id, content, tier, category, tags, source, access_count, 
-              resonance_phi, is_catalyst, created_at
-       FROM memories
-       WHERE tier = 'active' AND deleted_at IS NULL
-       ORDER BY last_accessed DESC`,
-      [],
-    );
-
-    memories.active = activeResult.rows;
-    remaining -= memories.active.length;
-  }
-
-  if (remaining > 0) {
-    // Split remaining between thread (70%) and stable (30%)
-    const threadLimit = Math.ceil(remaining * 0.7);
-    const stableLimit = Math.floor(remaining * 0.3);
-
-    // Load top thread tier memories (phi-weighted)
-    if (includeThread && threadLimit > 0) {
-      const threadResult = await query(
-        `SELECT id, content, tier, category, tags, source, access_count,
-                resonance_phi, is_catalyst, created_at
-         FROM memories
-         WHERE tier = 'thread' AND deleted_at IS NULL
-         ORDER BY resonance_phi DESC, access_count DESC, last_accessed DESC
-         LIMIT $1`,
-        [threadLimit],
-      );
-
-      memories.thread = threadResult.rows;
-    }
-
-    // Load top stable tier memories (phi-weighted)
-    if (includeStable && stableLimit > 0) {
-      const stableResult = await query(
-        `SELECT id, content, tier, category, tags, source, access_count,
-                resonance_phi, is_catalyst, created_at
-         FROM memories
-         WHERE tier = 'stable' AND deleted_at IS NULL
-         ORDER BY resonance_phi DESC, access_count DESC, last_accessed DESC
-         LIMIT $1`,
-        [stableLimit],
-      );
-
-      memories.stable = stableResult.rows;
-    }
-  }
-
-  // Update access tracking for all loaded memories
-  const allIds = [
-    ...memories.active.map((m) => m.id),
-    ...memories.thread.map((m) => m.id),
-    ...memories.stable.map((m) => m.id),
-  ];
-
-  if (allIds.length > 0) {
-    await query(
-      `UPDATE memories
-       SET access_count = access_count + 1,
-           last_accessed = NOW(),
-           accessed_in_conversation_ids = array_append(
-             COALESCE(accessed_in_conversation_ids, ARRAY[]::TEXT[]),
-             $2
-           ),
-           updated_at = NOW()
-       WHERE id = ANY($1)`,
-      [allIds, conversationId],
-    );
-  }
+  // REMOVED: Access tracking on bootstrap (read-only operation)
+  // Bootstrap should not modify data - it's a snapshot
 
   const distribution = {
     active: memories.active.length,
     thread: memories.thread.length,
     stable: memories.stable.length,
-    total: allIds.length,
+    total: result.rows.length,
   };
 
-  return {
-    memories,
-    distribution,
-  };
+  return { memories, distribution };
+}
+
+/**
+ * NEW: Async semantic consolidation (background processing)
+ */
+async function checkSemanticDuplicateAsync(newMemoryId, embedding) {
+  // Wait 1 second to ensure transaction committed
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  try {
+    const match = await findSemanticDuplicate(embedding);
+
+    if (match && match.id !== newMemoryId) {
+      // Fetch both memories to determine which is older
+      const bothMemories = await query(
+        `SELECT id, created_at FROM memories WHERE id = ANY($1)`,
+        [[newMemoryId, match.id]]
+      );
+
+      const newMem = bothMemories.rows.find(m => m.id === newMemoryId);
+      const oldMem = bothMemories.rows.find(m => m.id === match.id);
+
+      // Merge newer into older (preserve ID stability)
+      if (newMem && oldMem) {
+        const [olderMemory, newerMemory] =
+          new Date(oldMem.created_at) < new Date(newMem.created_at)
+            ? [oldMem.id, newMem.id]
+            : [newMem.id, oldMem.id];
+
+        // Fetch newer memory's content
+        const newerContent = await query(
+          `SELECT content FROM memories WHERE id = $1`,
+          [newerMemory]
+        );
+
+        // Merge newer into older
+        await mergeIntoSemanticCentroid(
+          olderMemory,
+          newerContent.rows[0].content,
+          false,
+          match.similarity
+        );
+
+        // Soft-delete the newer duplicate
+        await query(
+          `UPDATE memories SET deleted_at = NOW() WHERE id = $1`,
+          [newerMemory]
+        );
+
+        console.log(`✨ Semantic consolidation: merged ${newerMemory} into ${olderMemory}`);
+      }
+    }
+  } catch (error) {
+    // Log but don't throw - this is background processing
+    console.error('Semantic consolidation error:', error);
+  }
 }
 
 export { MemoryServiceError };
