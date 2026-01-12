@@ -20,12 +20,30 @@ const pool = new Pool({
   database: config.database.database,
   user: config.database.user,
   password: config.database.password,
-  
+
   // Connection pool settings
-  max: 20,                     // Maximum connections
-  idleTimeoutMillis: 30000,    // Close idle clients after 30s
-  connectionTimeoutMillis: 2000, // Error if can't connect in 2s
+  max: 50,                      // UP from 20 - support 50 concurrent users
+  idleTimeoutMillis: 30000,     // Keep at 30s
+  connectionTimeoutMillis: 5000, // UP from 2000 - handle cold starts
 });
+
+// NEW: Pool metrics logging
+setInterval(() => {
+  const stats = {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+  };
+
+  if (config.logLevel === 'debug' || stats.waiting > 0) {
+    console.log('[POOL]', stats);
+  }
+
+  // Warn if pool exhausted
+  if (stats.waiting > 5) {
+    console.warn('⚠️  Connection pool under pressure:', stats);
+  }
+}, 60000); // Every minute
 
 /**
  * Handle pool errors
