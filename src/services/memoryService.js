@@ -371,9 +371,11 @@ export async function loadBootstrap(bootstrapData) {
         ROW_NUMBER() OVER (
           PARTITION BY tier
           ORDER BY
-            CASE tier
-              WHEN 'active' THEN last_accessed
-              ELSE resonance_phi
+            CASE
+              WHEN tier = 'active' THEN EXTRACT(EPOCH FROM last_accessed)
+              WHEN tier = 'thread' THEN resonance_phi
+              WHEN tier = 'stable' THEN resonance_phi
+              ELSE 0
             END DESC
         ) as rn
       FROM memories
@@ -390,9 +392,9 @@ export async function loadBootstrap(bootstrapData) {
       (tier = 'stable' AND ${includeStable} AND rn <= tier_limits.stable_limit)
     ORDER BY
       CASE tier
-        WHEN 'active' THEN 1
-        WHEN 'thread' THEN 2
-        WHEN 'stable' THEN 3
+        WHEN 'active' THEN 1::double precision
+        WHEN 'thread' THEN 2::double precision
+        WHEN 'stable' THEN 3::double precision
       END,
       resonance_phi DESC
   `;
