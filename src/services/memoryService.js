@@ -372,10 +372,10 @@ export async function loadBootstrap(bootstrapData) {
           PARTITION BY tier
           ORDER BY
             CASE
-              WHEN tier = 'active' THEN EXTRACT(EPOCH FROM last_accessed)
-              WHEN tier = 'thread' THEN resonance_phi
-              WHEN tier = 'stable' THEN resonance_phi
-              ELSE 0
+              WHEN tier = 'active' THEN EXTRACT(EPOCH FROM last_accessed)::double precision
+              WHEN tier = 'thread' THEN resonance_phi::double precision
+              WHEN tier = 'stable' THEN resonance_phi::double precision
+              ELSE 0::double precision
             END DESC
         ) as rn
       FROM memories

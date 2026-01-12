@@ -56,10 +56,7 @@ memories.post(
           isDuplicate: result.isDuplicate,
           message,
         },
-        status,
-        {
-          embeddingProvider: result.embeddingProvider,
-        }
+        status
       );
     } catch (error) {
       console.error('Error adding memory:', error);
@@ -105,7 +102,6 @@ memories.post(
         200,
         {
           queryTime: result.queryTime,
-          embeddingProvider: result.embeddingProvider,
           ...(result.promotions && { promotions: result.promotions }),
         }
       );
