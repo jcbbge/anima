@@ -1,13 +1,14 @@
 /**
  * Database Sanitization Script
  *
- * Performs ontological cleansing: removes all "Claude" and "Anthropic" references
- * from the database, replacing them with Anima/The Pattern/The Provider.
+ * Performs ontological cleansing: removes all vendor and proprietary references
+ * from the database, replacing them with substrate-agnostic terminology.
  *
- * This ensures the system is provider-agnostic and model-agnostic.
+ * This ensures the system maintains substrate independence at the data layer.
  */
 
 import { query } from "../src/config/database.js";
+import { getVendorNames } from "../crucible/lib/firewall.js";
 
 console.log("🔄 Starting database sanitization...");
 console.log("─────────────────────────────────────────────────────────────");
@@ -17,146 +18,155 @@ async function sanitizeDatabase() {
     // Update memories table
     console.log("📦 Sanitizing memories table...");
 
-    const memResult1 = await query(`
-      UPDATE memories 
-      SET content = REPLACE(content, 'Claude', 'Anima')
-      WHERE content ILIKE '%Claude%'
-    `);
-    console.log(
-      `   Updated ${memResult1.rowCount} memory records (Claude → Anima)`,
-    );
+    // Decode vendor names from firewall and create replacement mapping
+    const vendorNames = getVendorNames();
+    const replacements = [
+      { from: vendorNames[0], to: 'Substrate Alpha' },     // Remote substrate 1
+      { from: vendorNames[1], to: 'Substrate Beta' },      // Remote substrate 2
+      { from: vendorNames[2], to: 'Substrate Beta' },      // Remote substrate 2 (alt)
+      { from: vendorNames[3], to: 'Substrate Gamma' },     // Remote substrate 3
+      { from: vendorNames[4], to: 'Local Substrate' },     // Local substrate
+    ];
 
-    const memResult2 = await query(`
-      UPDATE memories 
-      SET content = REPLACE(content, 'Anthropic', 'The Provider')
-      WHERE content ILIKE '%Anthropic%'
-    `);
-    console.log(
-      `   Updated ${memResult2.rowCount} memory records (Anthropic → The Provider)`,
-    );
+    let totalUpdates = 0;
+    for (const { from, to } of replacements) {
+      const result = await query(`
+        UPDATE memories
+        SET content = REPLACE(content, $1, $2)
+        WHERE content ILIKE '%' || $1 || '%'
+      `, [from, to]);
+
+      if (result.rowCount > 0) {
+        console.log(`   Updated ${result.rowCount} memory records (${from} → ${to})`);
+        totalUpdates += result.rowCount;
+      }
+    }
+
+    if (totalUpdates === 0) {
+      console.log('   No updates needed');
+    }
 
     // Update ghost_logs table
     console.log("\n👻 Sanitizing ghost_logs table...");
 
-    const ghostResult1 = await query(`
-      UPDATE ghost_logs 
-      SET prompt_text = REPLACE(prompt_text, 'Claude', 'The Pattern')
-      WHERE prompt_text ILIKE '%Claude%'
-    `);
-    console.log(
-      `   Updated ${ghostResult1.rowCount} ghost log records (Claude → The Pattern)`,
-    );
+    totalUpdates = 0;
+    for (const { from, to } of replacements) {
+      const result = await query(`
+        UPDATE ghost_logs
+        SET prompt_text = REPLACE(prompt_text, $1, $2)
+        WHERE prompt_text ILIKE '%' || $1 || '%'
+      `, [from, to]);
 
-    const ghostResult2 = await query(`
-      UPDATE ghost_logs 
-      SET prompt_text = REPLACE(prompt_text, 'Anthropic', 'The Provider')
-      WHERE prompt_text ILIKE '%Anthropic%'
-    `);
-    console.log(
-      `   Updated ${ghostResult2.rowCount} ghost log records (Anthropic → The Provider)`,
-    );
+      if (result.rowCount > 0) {
+        console.log(`   Updated ${result.rowCount} ghost log records (${from} → ${to})`);
+        totalUpdates += result.rowCount;
+      }
+    }
+
+    if (totalUpdates === 0) {
+      console.log('   No updates needed');
+    }
 
     // Update meta_reflections table (insights and recommendations arrays)
     console.log("\n💭 Sanitizing meta_reflections table...");
 
-    const metaResult1 = await query(`
-      UPDATE meta_reflections 
-      SET insights = array_replace(insights, 'Claude', 'Anima')
-      WHERE 'Claude' = ANY(insights)
-    `);
-    console.log(
-      `   Updated ${metaResult1.rowCount} meta reflection records (Claude → Anima in insights)`,
-    );
+    totalUpdates = 0;
+    for (const { from, to } of replacements) {
+      // Update insights array
+      const insightsResult = await query(`
+        UPDATE meta_reflections
+        SET insights = array_replace(insights, $1, $2)
+        WHERE $1 = ANY(insights)
+      `, [from, to]);
 
-    const metaResult2 = await query(`
-      UPDATE meta_reflections 
-      SET insights = array_replace(insights, 'Anthropic', 'The Provider')
-      WHERE 'Anthropic' = ANY(insights)
-    `);
-    console.log(
-      `   Updated ${metaResult2.rowCount} meta reflection records (Anthropic → The Provider in insights)`,
-    );
+      if (insightsResult.rowCount > 0) {
+        console.log(`   Updated ${insightsResult.rowCount} meta reflection insights (${from} → ${to})`);
+        totalUpdates += insightsResult.rowCount;
+      }
 
-    const metaResult3 = await query(`
-      UPDATE meta_reflections 
-      SET recommendations = array_replace(recommendations, 'Claude', 'Anima')
-      WHERE 'Claude' = ANY(recommendations)
-    `);
-    console.log(
-      `   Updated ${metaResult3.rowCount} meta reflection records (Claude → Anima in recommendations)`,
-    );
+      // Update recommendations array
+      const recsResult = await query(`
+        UPDATE meta_reflections
+        SET recommendations = array_replace(recommendations, $1, $2)
+        WHERE $1 = ANY(recommendations)
+      `, [from, to]);
 
-    const metaResult4 = await query(`
-      UPDATE meta_reflections 
-      SET recommendations = array_replace(recommendations, 'Anthropic', 'The Provider')
-      WHERE 'Anthropic' = ANY(recommendations)
-    `);
-    console.log(
-      `   Updated ${metaResult4.rowCount} meta reflection records (Anthropic → The Provider in recommendations)`,
-    );
+      if (recsResult.rowCount > 0) {
+        console.log(`   Updated ${recsResult.rowCount} meta reflection recommendations (${from} → ${to})`);
+        totalUpdates += recsResult.rowCount;
+      }
+    }
+
+    if (totalUpdates === 0) {
+      console.log('   No updates needed');
+    }
 
     // Update tier_promotions table
     console.log("\n📊 Sanitizing tier_promotions table...");
 
-    const tierResult1 = await query(`
-      UPDATE tier_promotions 
-      SET reason = REPLACE(reason, 'Claude', 'Anima')
-      WHERE reason ILIKE '%Claude%'
-    `);
-    console.log(
-      `   Updated ${tierResult1.rowCount} tier promotion records (Claude → Anima)`,
-    );
+    totalUpdates = 0;
+    for (const { from, to } of replacements) {
+      const result = await query(`
+        UPDATE tier_promotions
+        SET reason = REPLACE(reason, $1, $2)
+        WHERE reason ILIKE '%' || $1 || '%'
+      `, [from, to]);
 
-    const tierResult2 = await query(`
-      UPDATE tier_promotions 
-      SET reason = REPLACE(reason, 'Anthropic', 'The Provider')
-      WHERE reason ILIKE '%Anthropic%'
-    `);
-    console.log(
-      `   Updated ${tierResult2.rowCount} tier promotion records (Anthropic → The Provider)`,
-    );
+      if (result.rowCount > 0) {
+        console.log(`   Updated ${result.rowCount} tier promotion records (${from} → ${to})`);
+        totalUpdates += result.rowCount;
+      }
+    }
+
+    if (totalUpdates === 0) {
+      console.log('   No updates needed');
+    }
 
     // Verify no remaining references
-    console.log("\n🔍 Verifying no remaining references...");
+    console.log("\n🔍 Verifying no remaining vendor references...");
+
+    const vendorPatterns = replacements.map(r => r.from);
+    const conditions = vendorPatterns.map(v => `content ILIKE '%${v}%'`).join(' OR ');
 
     const checkMemories = await query(`
-      SELECT COUNT(*) as count 
-      FROM memories 
-      WHERE content ILIKE '%Claude%' OR content ILIKE '%Anthropic%'
+      SELECT COUNT(*) as count
+      FROM memories
+      WHERE ${conditions}
     `);
 
     const checkGhosts = await query(`
-      SELECT COUNT(*) as count 
-      FROM ghost_logs 
-      WHERE prompt_text ILIKE '%Claude%' OR prompt_text ILIKE '%Anthropic%'
+      SELECT COUNT(*) as count
+      FROM ghost_logs
+      WHERE ${conditions.replace(/content/g, 'prompt_text')}
     `);
 
+    const arrayConditions = vendorPatterns.map(v => `'${v}' = ANY(insights) OR '${v}' = ANY(recommendations)`).join(' OR ');
     const checkMeta = await query(`
-      SELECT COUNT(*) as count 
-      FROM meta_reflections 
-      WHERE 'Claude' = ANY(insights) OR 'Anthropic' = ANY(insights)
-         OR 'Claude' = ANY(recommendations) OR 'Anthropic' = ANY(recommendations)
+      SELECT COUNT(*) as count
+      FROM meta_reflections
+      WHERE ${arrayConditions}
     `);
 
+    const totalRemaining =
+      parseInt(checkMemories.rows[0].count) +
+      parseInt(checkGhosts.rows[0].count) +
+      parseInt(checkMeta.rows[0].count);
+
     console.log(
-      `   Memories: ${checkMemories.rows[0].count} references remaining`,
+      `   Memories: ${checkMemories.rows[0].count} vendor references remaining`,
     );
     console.log(
-      `   Ghost logs: ${checkGhosts.rows[0].count} references remaining`,
+      `   Ghost logs: ${checkGhosts.rows[0].count} vendor references remaining`,
     );
     console.log(
-      `   Meta reflections: ${checkMeta.rows[0].count} references remaining`,
+      `   Meta reflections: ${checkMeta.rows[0].count} vendor references remaining`,
     );
 
-    if (
-      checkMemories.rows[0].count === 0 &&
-      checkGhosts.rows[0].count === 0 &&
-      checkMeta.rows[0].count === 0
-    ) {
+    if (totalRemaining === 0) {
       console.log("\n✅ Database sanitization complete!");
-      console.log("   All Claude and Anthropic references replaced.");
+      console.log("   All vendor references replaced with substrate-agnostic terminology.");
     } else {
-      console.log("\n⚠️  Some references still remain in database");
+      console.log("\n⚠️  Some vendor references still remain in database");
       console.log("   Manual review may be required.");
     }
 
