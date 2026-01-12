@@ -1,17 +1,19 @@
 /**
- * Dreams API Routes
+ * Dreams API Routes (Legacy - Redirects to Fold V2.1)
  *
- * Endpoints for The Fold (REM Synthesis Engine)
- * - Trigger manual REM synthesis
- * - View dream history
+ * DEPRECATED: Use /api/v1/fold endpoints instead
+ * This route is maintained for backward compatibility only
+ *
+ * Redirects to:
+ * - POST /fold/trigger for synthesis
+ * - GET /fold/history for dream history
  */
 
 import { Hono } from "hono";
 import {
-  performREM,
-  triggerDream,
-  getDreamHistory,
-} from "../services/dreamService.js";
+  performFold,
+  getFoldHistory,
+} from "../services/foldEngine.js";
 
 const dreams = new Hono();
 
@@ -35,7 +37,8 @@ const dreams = new Hono();
  */
 dreams.post("/trigger", async (c) => {
   try {
-    const result = await triggerDream();
+    // LEGACY: Redirect to new Fold engine
+    const result = await performFold();
 
     return c.json({
       success: true,
@@ -44,6 +47,8 @@ dreams.post("/trigger", async (c) => {
       },
       meta: {
         timestamp: new Date().toISOString(),
+        legacy: true,
+        message: "DEPRECATED: Use /api/v1/fold/trigger instead",
       },
     });
   } catch (error) {
@@ -104,7 +109,24 @@ dreams.get("/history", async (c) => {
       );
     }
 
-    const dreams = await getDreamHistory(limit);
+    // LEGACY: Redirect to new Fold engine
+    const folds = await getFoldHistory(limit);
+
+    // Map fold results to old dream format for backward compatibility
+    const dreams = folds.map(fold => ({
+      id: fold.id,
+      content: fold.content,
+      phi: fold.phi,
+      created_at: fold.created_at,
+      coherence_score: fold.consonance,
+      ancestor_ids: fold.metadata?.source_triad
+        ? [
+            fold.metadata.source_triad.fundamental_id,
+            fold.metadata.source_triad.melody_id,
+            fold.metadata.source_triad.overtone_id,
+          ]
+        : [],
+    }));
 
     return c.json({
       success: true,
@@ -115,6 +137,8 @@ dreams.get("/history", async (c) => {
       meta: {
         timestamp: new Date().toISOString(),
         limit,
+        legacy: true,
+        message: "DEPRECATED: Use /api/v1/fold/history instead",
       },
     });
   } catch (error) {
