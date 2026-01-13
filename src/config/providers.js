@@ -202,8 +202,8 @@ export class RemoteSubstrateProvider extends SubstrateProvider {
  * Creates the appropriate substrate provider based on configuration.
  */
 export function createSubstrateProvider(type, config) {
-  // Treat 'local' and 'ollama' as local substrate
-  if (type === 'local' || type === 'ollama') {
+  // Treat 'local' as local substrate
+  if (type === 'local') {
     return new LocalSubstrateProvider(config);
   } else if (type === 'remote' || type === 'alpha') {
     return new RemoteSubstrateProvider(config);

@@ -85,6 +85,30 @@ async function setupTestSchema() {
     WHERE deleted_at IS NULL
   `);
 
+  // Create meta_reflections table in test schema
+  await testQuery(`
+    CREATE TABLE ${TEST_SCHEMA}.meta_reflections (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      reflection_type TEXT NOT NULL,
+      conversation_id UUID,
+      metrics JSONB,
+      insights TEXT[],
+      recommendations TEXT[],
+      session_metrics JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Create indexes for meta_reflections
+  await testQuery(`
+    CREATE INDEX idx_test_meta_reflections_type ON ${TEST_SCHEMA}.meta_reflections(reflection_type)
+  `);
+
+  await testQuery(`
+    CREATE INDEX idx_test_meta_reflections_conversation_id ON ${TEST_SCHEMA}.meta_reflections(conversation_id)
+    WHERE conversation_id IS NOT NULL
+  `);
+
   console.log(`✅ Test schema '${TEST_SCHEMA}' created`);
 }
 

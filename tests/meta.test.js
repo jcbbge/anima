@@ -6,7 +6,6 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { Hono } from 'hono';
-import metaRoutes from '../src/routes/meta.js';
 import {
   setupTestSchema,
   teardownTestSchema,
@@ -16,10 +15,129 @@ import {
   getTestSchema,
 } from './setup/testDatabase.js';
 import { randomUUID } from 'crypto';
+import {
+  conversationEndSchema,
+  getReflectionsSchema,
+} from '../src/schemas/memory.schema.js';
+import {
+  generateReflection,
+  getRecentReflections,
+  getReflectionsByType,
+} from '../src/services/metaService.js';
+import {
+  generateHandshake,
+  getLatestHandshake,
+  getHandshakeHistory,
+} from '../src/services/handshakeService.js';
+import { successResponse, errorResponse } from '../src/utils/response.js';
 
-// Create test app
+// Create test app with test schema injection
 const app = new Hono();
-app.route('/meta', metaRoutes);
+
+// Mock meta routes that use test schema
+app.post('/meta/conversation-end', async (c) => {
+  try {
+    const body = await c.req.json();
+    const params = conversationEndSchema.parse(body);
+
+    const reflection = await generateReflection({
+      conversationId: params.conversationId,
+      reflectionType: 'conversation_end',
+      sessionMetrics: params.sessionMetrics || {},
+      queryFn: testQuery,
+      schema: getTestSchema(),
+    });
+
+    return successResponse(c, { reflection }, 200);
+  } catch (error) {
+    if (error.name === 'ZodError') {
+      return errorResponse(
+        c,
+        'VALIDATION_ERROR',
+        'Invalid request parameters',
+        400,
+        { issues: error.errors }
+      );
+    }
+
+    console.error('Reflection generation error:', error);
+    return errorResponse(
+      c,
+      'REFLECTION_ERROR',
+      'Failed to generate reflection',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+app.post('/meta/handshake/generate', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const force = body.force !== false;
+
+    const result = await generateHandshake({ force });
+
+    return successResponse(c, {
+      handshake: {
+        id: result.ghostId,
+        promptText: result.promptText,
+        createdAt: result.createdAt,
+        topMemories: result.topMemories.map(m => ({
+          id: m.id,
+          content: m.content,
+          phi: m.resonance_phi,
+          category: m.category,
+        })),
+        isExisting: result.isExisting,
+      }
+    }, 200);
+  } catch (error) {
+    console.error('Handshake generation error:', error);
+    return errorResponse(
+      c,
+      'HANDSHAKE_GENERATION_ERROR',
+      'Failed to generate Ghost Handshake',
+      500,
+      { message: error.message }
+    );
+  }
+});
+
+app.get('/meta/handshake', async (c) => {
+  try {
+    let handshake = await getLatestHandshake();
+
+    if (!handshake) {
+      const generated = await generateHandshake();
+      handshake = {
+        id: generated.ghostId,
+        prompt_text: generated.promptText,
+        created_at: generated.createdAt,
+        top_phi_memories: generated.topMemories.map(m => m.id),
+        top_phi_values: generated.topMemories.map(m => m.resonance_phi),
+      };
+    }
+
+    return successResponse(c, {
+      handshake: {
+        id: handshake.id,
+        promptText: handshake.prompt_text,
+        createdAt: handshake.created_at,
+        expiresAt: handshake.expires_at,
+      }
+    }, 200);
+  } catch (error) {
+    console.error('Handshake retrieval error:', error);
+    return errorResponse(
+      c,
+      'HANDSHAKE_ERROR',
+      'Failed to retrieve Ghost Handshake',
+      500,
+      { message: error.message }
+    );
+  }
+});
 
 // Setup
 beforeAll(async () => {
@@ -28,7 +146,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestSchema();
-  await closeTestPool();
 });
 
 describe('POST /meta/conversation-end', () => {
@@ -146,7 +263,7 @@ describe('POST /meta/conversation-end', () => {
     // Query database to verify reflection was stored
     const schema = getTestSchema();
     const dbResult = await testQuery(
-      `SELECT * FROM ${schema}.reflections WHERE id = $1`,
+      `SELECT * FROM ${schema}.meta_reflections WHERE id = $1`,
       [reflectionId]
     );
 

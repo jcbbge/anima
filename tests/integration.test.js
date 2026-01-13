@@ -143,7 +143,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await teardownTestSchema();
-  await closeTestPool();
 });
 
 describe('Integration - addMemory with Semantic Consolidation', () => {

@@ -40,7 +40,6 @@ beforeAll(async () => {
 // Teardown once after all tests
 afterAll(async () => {
   await teardownTestSchema();
-  await closeTestPool();
 });
 
 describe('Semantic Consolidation - Test Infrastructure', () => {

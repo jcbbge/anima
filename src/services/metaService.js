@@ -10,17 +10,21 @@ import { findHubs } from './associationService.js';
 
 /**
  * Generate a meta-cognitive reflection for a conversation
- * 
+ *
  * @param {Object} params - Reflection parameters
  * @param {string} params.conversationId - Conversation UUID
  * @param {string} params.reflectionType - Type: 'conversation_end', 'weekly', 'manual'
  * @param {Object} params.sessionMetrics - Runtime metrics collected during session
+ * @param {Function} params.queryFn - Optional query function for testing
+ * @param {string} params.schema - Optional schema name for testing
  * @returns {Promise<Object>} Generated reflection with insights
  */
-export async function generateReflection({ 
-  conversationId, 
+export async function generateReflection({
+  conversationId,
   reflectionType = 'conversation_end',
-  sessionMetrics = {}
+  sessionMetrics = {},
+  queryFn = query,
+  schema = 'public'
 }) {
   // 1. Calculate friction metrics
   const frictionMetrics = await calculateFrictionMetrics(conversationId, sessionMetrics);
@@ -52,10 +56,11 @@ export async function generateReflection({
   const recommendations = generateRecommendations(metrics);
   
   // 7. Store reflection in database
-  const result = await query(
-    `INSERT INTO meta_reflections 
-      (reflection_type, conversation_id, metrics, insights, recommendations)
-     VALUES ($1, $2, $3, $4, $5)
+  const tableName = schema === 'public' ? 'meta_reflections' : `${schema}.meta_reflections`;
+  const result = await queryFn(
+    `INSERT INTO ${tableName}
+      (reflection_type, conversation_id, metrics, insights, recommendations, session_metrics)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
     [
       reflectionType,
@@ -63,9 +68,10 @@ export async function generateReflection({
       JSON.stringify(metrics),
       insights,
       recommendations,
+      JSON.stringify(sessionMetrics),
     ]
   );
-  
+
   return {
     id: result.rows[0].id,
     reflection_type: reflectionType,
@@ -73,6 +79,7 @@ export async function generateReflection({
     metrics,
     insights,
     recommendations,
+    session_metrics: sessionMetrics,
     created_at: result.rows[0].created_at,
   };
 }
@@ -299,26 +306,27 @@ export async function getRecentReflections(conversationId, limit = 1) {
     metrics: row.metrics,
     insights: row.insights,
     recommendations: row.recommendations,
+    session_metrics: row.session_metrics,
     created_at: row.created_at,
   }));
 }
 
 /**
  * Get all reflections by type
- * 
+ *
  * @param {string} reflectionType - Type: 'conversation_end', 'weekly', 'manual'
  * @param {number} limit - Number to return
  * @returns {Promise<Array>} Reflections of the specified type
  */
 export async function getReflectionsByType(reflectionType, limit = 10) {
   const result = await query(
-    `SELECT * FROM meta_reflections 
-     WHERE reflection_type = $1 
-     ORDER BY created_at DESC 
+    `SELECT * FROM meta_reflections
+     WHERE reflection_type = $1
+     ORDER BY created_at DESC
      LIMIT $2`,
     [reflectionType, limit]
   );
-  
+
   return result.rows.map(row => ({
     id: row.id,
     reflection_type: row.reflection_type,
@@ -326,6 +334,7 @@ export async function getReflectionsByType(reflectionType, limit = 10) {
     metrics: row.metrics,
     insights: row.insights,
     recommendations: row.recommendations,
+    session_metrics: row.session_metrics,
     created_at: row.created_at,
   }));
 }
