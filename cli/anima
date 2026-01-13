@@ -576,25 +576,28 @@ cmd_drift() {
 # ============================================================================
 cmd_reflect() {
   check_api
-  
+
   echo "💭 Generating reflection for conversation..."
-  
-  local response=$(curl -s -X POST "${API_BASE}/meta/handshake/generate" \
+
+  local response=$(curl -s -X POST "${API_BASE}/meta/conversation-end" \
     -H "Content-Type: application/json" \
-    -d "{\"force\": true}")
-  
+    -d "{\"conversationId\": \"${ANIMA_CONV_ID}\"}")
+
   local success=$(echo "$response" | jq -r '.success')
-  
+
   if [ "$success" == "true" ]; then
-    echo -e "${SUCCESS_COLOR}✅ Reflection generated and stored as Ghost Handshake${RESET_COLOR}"
-    
-    # Show the generated handshake
-    local prompt_text=$(echo "$response" | jq -r '.data.handshake.promptText')
+    echo -e "${SUCCESS_COLOR}✅ Meta-reflection generated and stored${RESET_COLOR}"
+
+    # Show the reflection summary
+    local reflection_id=$(echo "$response" | jq -r '.data.reflection.id')
+    local reflection_type=$(echo "$response" | jq -r '.data.reflection.reflection_type')
     echo ""
-    echo -e "${GHOST_COLOR}${prompt_text}${RESET_COLOR}"
+    echo -e "  Reflection ID: ${PHI_COLOR}${reflection_id}${RESET_COLOR}"
+    echo -e "  Type: ${reflection_type}"
     echo ""
   else
-    echo -e "${ERROR_COLOR}❌ Failed to generate reflection${RESET_COLOR}" >&2
+    local error_msg=$(echo "$response" | jq -r '.error.message // "Unknown error"')
+    echo -e "${ERROR_COLOR}❌ Failed to generate reflection: ${error_msg}${RESET_COLOR}" >&2
     exit 1
   fi
 }
