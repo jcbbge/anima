@@ -90,6 +90,27 @@ async function closePool() {
 }
 
 /**
+ * Schema management for test isolation
+ */
+let currentSchema = 'public';
+
+/**
+ * Set the database schema for subsequent queries
+ * @param {string} schema - Schema name to use
+ */
+function setDatabaseSchema(schema) {
+  currentSchema = schema;
+}
+
+/**
+ * Get the current database schema
+ * @returns {string} Current schema name
+ */
+function getDatabaseSchema() {
+  return currentSchema;
+}
+
+/**
  * Execute a query with error handling
  * @param {string} text - SQL query text
  * @param {Array} params - Query parameters
@@ -98,22 +119,28 @@ async function closePool() {
 async function query(text, params) {
   const start = Date.now();
   try {
-    const result = await pool.query(text, params);
+    // Inject schema prefix for non-public schemas
+    const schemaPrefix = currentSchema !== 'public' ? `SET search_path TO ${currentSchema}, public; ` : '';
+    const fullQuery = schemaPrefix + text;
+
+    const result = await pool.query(fullQuery, params);
     const duration = Date.now() - start;
-    
+
     if (config.logLevel === 'debug') {
       console.log('Query executed:', {
         text: text.substring(0, 100),
         duration: `${duration}ms`,
         rows: result.rowCount,
+        schema: currentSchema,
       });
     }
-    
+
     return result;
   } catch (error) {
     console.error('❌ Query error:', {
       text: text.substring(0, 100),
       error: error.message,
+      schema: currentSchema,
     });
     throw error;
   }
@@ -140,4 +167,4 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-export { pool, query, getClient, testConnection, closePool };
+export { pool, query, getClient, testConnection, closePool, setDatabaseSchema, getDatabaseSchema };

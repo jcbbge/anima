@@ -8,7 +8,7 @@
  * - Access tracking and co-occurrence recording
  */
 
-import { query, getClient } from "../config/database.js";
+import { query, getClient, getDatabaseSchema } from "../config/database.js";
 import { generateEmbedding } from "./embeddingService.js";
 import { generateHash } from "../utils/hashing.js";
 import { checkAndPromote } from "./tierService.js";
