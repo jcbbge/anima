@@ -207,7 +207,7 @@ describe("🔧 Test Infrastructure: Schema Management", () => {
 
     expect(handshake).toBeDefined();
     expect(handshake.ghostId).toBeDefined();
-    expect(handshake.prompt).toBeDefined();
+    expect(handshake.promptText).toBeDefined();
 
     console.log("✅ Audit suite pattern works correctly");
     console.log(`   Handshake generated for conversation: ${convId}`);

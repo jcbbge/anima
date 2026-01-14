@@ -118,12 +118,43 @@ function getDatabaseSchema() {
  */
 async function query(text, params) {
   const start = Date.now();
-  try {
-    // Inject schema prefix for non-public schemas
-    const schemaPrefix = currentSchema !== 'public' ? `SET search_path TO ${currentSchema}, public; ` : '';
-    const fullQuery = schemaPrefix + text;
 
-    const result = await pool.query(fullQuery, params);
+  // For non-public schemas, we need to use a client and set search_path
+  if (currentSchema !== 'public') {
+    const client = await pool.connect();
+    try {
+      // Set search_path for this client
+      await client.query(`SET search_path TO ${currentSchema}, public`);
+
+      // Execute the actual query
+      const result = await client.query(text, params);
+      const duration = Date.now() - start;
+
+      if (config.logLevel === 'debug') {
+        console.log('Query executed:', {
+          text: text.substring(0, 100),
+          duration: `${duration}ms`,
+          rows: result.rowCount,
+          schema: currentSchema,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      console.error('❌ Query error:', {
+        text: text.substring(0, 100),
+        error: error.message,
+        schema: currentSchema,
+      });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // For public schema, use pool directly (faster)
+  try {
+    const result = await pool.query(text, params);
     const duration = Date.now() - start;
 
     if (config.logLevel === 'debug') {

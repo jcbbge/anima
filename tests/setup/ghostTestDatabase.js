@@ -116,7 +116,6 @@ async function setupGhostTestSchema() {
 
   await ghostTestQuery(`
     CREATE INDEX idx_ghost_test_logs_expires ON ${GHOST_TEST_SCHEMA}.ghost_logs(expires_at)
-    WHERE expires_at > NOW()
   `);
 
   // Create meta_reflections table

@@ -58,7 +58,7 @@ describe("🛡️  Ghost Protocol Audit: Conversation Isolation", () => {
   afterAll(async () => {
     setDatabaseSchema('public');
     await teardownGhostTestSchema();
-    await closeGhostTestPool();
+    // Don't close pool yet - other describe blocks need it
   });
 
   test("TEST 1: Handshake should differ for conversations with different contexts", async () => {
@@ -250,7 +250,7 @@ describe("🛡️  Ghost Protocol Audit: Cache Timing Strategy", () => {
   afterAll(async () => {
     setDatabaseSchema('public');
     await teardownGhostTestSchema();
-    await closeGhostTestPool();
+    // Don't close pool yet - Core Protocol tests still need it
   });
 
   test("TEST 7a.1: Should NOT regenerate within 15min for SAME conversation", async () => {
