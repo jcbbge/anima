@@ -127,16 +127,35 @@ export async function generateHandshake(options = {}) {
 
   const threads = threadsResult.rows;
 
-  // 3. Get most recent reflection (if any)
-  const reflectionResult = await query(
-    `SELECT metrics, insights, reflection_type
-     FROM meta_reflections
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [],
-  );
+  // 3. Get most recent reflection (prioritize conversation-specific)
+  let reflection = null;
 
-  const reflection = reflectionResult.rows[0] || null;
+  if (conversationId) {
+    // Try conversation-specific reflection first
+    const convReflectionResult = await query(
+      `SELECT metrics, insights, reflection_type
+       FROM meta_reflections
+       WHERE conversation_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [conversationId],
+    );
+
+    reflection = convReflectionResult.rows[0] || null;
+  }
+
+  // Fall back to most recent global reflection if no conversation-specific one found
+  if (!reflection) {
+    const globalReflectionResult = await query(
+      `SELECT metrics, insights, reflection_type
+       FROM meta_reflections
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [],
+    );
+
+    reflection = globalReflectionResult.rows[0] || null;
+  }
 
   // 4. Get recent dreams (autonomous synthesis) created since last handshake
   let lastHandshakeTime = new Date(0); // Epoch if no previous handshake
@@ -317,15 +336,17 @@ function extractFocus(insight) {
     return match[1].trim();
   }
 
-  // Fallback: look for noun phrases
-  const nounMatch = insight.match(
-    /\b(the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/,
+  // Handle "Breakthrough in X" pattern - preserve the full context
+  const breakthroughMatch = insight.match(
+    /^breakthrough\s+in\s+(.+)/i,
   );
-  if (nounMatch) {
-    return nounMatch[0].toLowerCase();
+  if (breakthroughMatch) {
+    return breakthroughMatch[1].trim().toLowerCase();
   }
 
-  return "the current research direction";
+  // Fallback: use the full insight in lowercase (preserve all context)
+  // This ensures reflection insights are fully represented in the handshake
+  return insight.toLowerCase();
 }
 
 /**

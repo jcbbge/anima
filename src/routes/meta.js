@@ -185,8 +185,9 @@ app.post('/handshake/generate', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const force = body.force !== false; // Default to true
-    
-    const result = await generateHandshake({ force });
+    const conversationId = body.conversationId || null;
+
+    const result = await generateHandshake({ force, conversationId });
     
     return successResponse(c, {
       handshake: {
@@ -200,6 +201,8 @@ app.post('/handshake/generate', async (c) => {
           category: m.category,
         })),
         isExisting: result.isExisting,
+        conversationId: result.conversationId,
+        contextType: result.contextType,
       }
     }, 200);
   } catch (error) {
