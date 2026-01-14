@@ -11,7 +11,7 @@
  * - Feels like waking up, not rebooting
  */
 
-import { query } from "../config/database.js";
+import { query, getDatabaseSchema } from "../config/database.js";
 
 /**
  * Custom error class for handshake service errors
