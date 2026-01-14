@@ -143,21 +143,19 @@ Expected results:
 
 ## Files Created/Modified
 
-### Created (5 new files)
+### Created (4 new files)
 1. `src/services/embeddingCache.js` - LRU cache implementation
 2. `src/middleware/timing.js` - Request timing middleware
 3. `database/migrations/007_performance_indexes.sql` - Performance indexes
 4. `tests/performance/k6-load-test.js` - Load testing script
-5. `IMPLEMENTATION_COMPLETE.md` - Technical details
-6. `DEPLOYMENT_SUMMARY.md` - This file
 
-### Modified (7 existing files)
+### Modified (6 existing files)
 1. `src/services/embeddingService.js` - Cache integration
 2. `src/services/memoryService.js` - Batch operations, async consolidation, bootstrap optimization
 3. `src/routes/meta.js` - Cache stats & metrics endpoints
 4. `src/app.js` - Timing middleware
 5. `src/config/database.js` - Pool tuning & metrics
-6. `PERFORMANCE_IMPLEMENTATION.md` - Master implementation guide
+6. `docs/performance/PERFORMANCE.md` - This deployment summary
 
 ---
 
@@ -379,7 +377,7 @@ After 24 hours, you should see:
 
 - **Cache not warming up?** Check if embedding service (locally-hosted model service) is running
 - **Still seeing slowness?** Check logs: `docker logs anima-api -f`
-- **Want to dig deeper?** See `IMPLEMENTATION_COMPLETE.md` for technical details
+- **Want to dig deeper?** See the [Architecture](../architecture/ARCHITECTURE.md) documentation
 
 ---
 

@@ -42,3 +42,11 @@ reports/
 *_AUDIT.md
 *_PLAN.md
 *_SUMMARY.md
+
+# Development workspace (local only - never commit)
+/workspace/
+workspace/
+
+# Database files (local development)
+database/anima.db
+database/*.db

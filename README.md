@@ -202,6 +202,7 @@ cd ~/.anima
 - [Architecture](docs/architecture/ARCHITECTURE.md)
 - [API](docs/api/API.md)
 - [The Fold](docs/features/THE_FOLD.md)
+- [Guides](docs/) - Testing, validation, auto-bootstrap, and more
 
 ---
 
