@@ -14,6 +14,15 @@
 import { query, getDatabaseSchema } from "../config/database.js";
 
 /**
+ * Cache window constants for tiered caching strategy (PRD-003)
+ */
+const CACHE_WINDOWS = {
+  PER_CONVERSATION: 15 * 60 * 1000,    // 15 minutes
+  PER_SESSION: 60 * 60 * 1000,          // 1 hour
+  GLOBAL: 24 * 60 * 60 * 1000,          // 24 hours
+};
+
+/**
  * Custom error class for handshake service errors
  */
 class HandshakeServiceError extends Error {
@@ -39,38 +48,70 @@ class HandshakeServiceError extends Error {
  * @returns {Promise<{promptText: string, topMemories: Array, ghostId: string}>}
  */
 export async function generateHandshake(options = {}) {
-  const { force = false } = options;
+  const { force = false, conversationId = null } = options;
 
-  // Check if recent ghost exists (within last 24 hours)
+  // Three-tier cache check: per-conversation (15min) → session (1hr) → global (24hr)
   if (!force) {
-    const recentGhost = await getLatestHandshake();
+    let recentGhost = null;
+    let cacheWindow = CACHE_WINDOWS.GLOBAL;
+    let cacheReason = 'global_fallback';
+
+    // Tier 1: Try conversation-specific cache (15 minutes)
+    if (conversationId) {
+      recentGhost = await getLatestHandshakeForConversation(conversationId);
+      cacheWindow = CACHE_WINDOWS.PER_CONVERSATION;
+      cacheReason = 'per_conversation';
+    } else {
+      // No conversation ID: use global cache (24 hours)
+      recentGhost = await getLatestHandshake();
+      cacheWindow = CACHE_WINDOWS.GLOBAL;
+      cacheReason = 'global_fallback';
+    }
+
     if (recentGhost) {
       const ghostAge = Date.now() - new Date(recentGhost.created_at).getTime();
-      const oneDayInMs = 24 * 60 * 60 * 1000;
 
-      if (ghostAge < oneDayInMs) {
-        console.log("📋 Using existing ghost (created < 24h ago)");
+      // Check for significant state changes (catalysts or high-phi memories)
+      const hasStateChange = await detectSignificantStateChange(
+        conversationId,
+        recentGhost.created_at
+      );
+
+      // Return cached ghost if within window and no state changes
+      if (ghostAge < cacheWindow && !hasStateChange) {
+        console.log(`📋 Using cached ghost (age: ${ghostAge}ms, reason: ${cacheReason}, conv: ${conversationId || 'global'})`);
         return {
           promptText: recentGhost.prompt_text,
-          topMemories: [],
+          topMemories: recentGhost.top_phi_memories || [],
+          topPhiValues: recentGhost.top_phi_values || [],
           ghostId: recentGhost.id,
           isExisting: true,
+          conversationId: recentGhost.conversation_id,
+          contextType: recentGhost.context_type || 'global',
+          cachedFor: ghostAge,
+          cacheReason,
+          cacheWindow,
         };
+      }
+
+      // Log why cache was invalidated
+      if (hasStateChange) {
+        console.log(`🔄 Invalidating cache due to state change (conv: ${conversationId})`);
+      }
+
+      if (ghostAge >= cacheWindow) {
+        console.log(`⏰ Cache expired (age: ${ghostAge}ms > window: ${cacheWindow}ms)`);
       }
     }
   }
 
-  // 1. Get top 3 highest-phi memories
-  const topMemoriesResult = await query(
-    `SELECT id, content, resonance_phi, category, tier
-     FROM memories
-     WHERE deleted_at IS NULL
-     ORDER BY resonance_phi DESC, access_count DESC
-     LIMIT 3`,
-    [],
-  );
-
-  const topMemories = topMemoriesResult.rows;
+  // 1. Get top 3 highest-phi memories (conversation-specific or global)
+  let topMemories;
+  if (conversationId) {
+    topMemories = await getTopMemoriesForConversation(conversationId, 3);
+  } else {
+    topMemories = await getTopMemoriesGlobal(3);
+  }
 
   // 2. Get active research threads
   const threadsResult = await query(
@@ -149,15 +190,19 @@ export async function generateHandshake(options = {}) {
        prompt_text,
        top_phi_memories,
        top_phi_values,
-       synthesis_method
+       synthesis_method,
+       conversation_id,
+       context_type
      )
-     VALUES ($1, $2, $3, $4)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, created_at`,
     [
       synthesis,
       topMemories.map((m) => m.id),
       topMemories.map((m) => m.resonance_phi),
       "standard",
+      conversationId,
+      conversationId ? 'conversation' : 'global',
     ],
   );
 
@@ -168,9 +213,15 @@ export async function generateHandshake(options = {}) {
   return {
     promptText: synthesis,
     topMemories,
+    topPhiValues: topMemories.map(m => m.resonance_phi),
     ghostId: ghost.id,
     createdAt: ghost.created_at,
     isExisting: false,
+    conversationId,
+    contextType: conversationId ? 'conversation' : 'global',
+    cachedFor: 0,
+    cacheReason: null,
+    cacheWindow: null,
   };
 }
 
@@ -363,13 +414,126 @@ function extractDreamConcepts(content) {
 }
 
 /**
+ * Get top memories for a specific conversation (PRD-002)
+ *
+ * Applies 2x phi boost to conversation-specific memories.
+ * Falls back to high-phi global memories (>=4.0).
+ *
+ * @param {string} conversationId - UUID of the conversation
+ * @param {number} limit - Maximum number of memories to return
+ * @returns {Promise<Array>} Top memories for the conversation
+ */
+async function getTopMemoriesForConversation(conversationId, limit) {
+  const result = await query(
+    `SELECT id, content, resonance_phi, category, tier, last_accessed, created_at
+     FROM memories
+     WHERE deleted_at IS NULL
+       AND (
+         conversation_id = $1
+         OR resonance_phi >= 4.0
+       )
+     ORDER BY
+       CASE
+         WHEN conversation_id = $1 THEN resonance_phi * 2.0
+         ELSE resonance_phi
+       END DESC,
+       EXTRACT(EPOCH FROM last_accessed) DESC
+     LIMIT $2`,
+    [conversationId, limit]
+  );
+
+  return result.rows;
+}
+
+/**
+ * Get top memories globally (no conversation filter)
+ *
+ * @param {number} limit - Maximum number of memories to return
+ * @returns {Promise<Array>} Top memories globally
+ */
+async function getTopMemoriesGlobal(limit) {
+  const result = await query(
+    `SELECT id, content, resonance_phi, category, tier
+     FROM memories
+     WHERE deleted_at IS NULL
+     ORDER BY resonance_phi DESC, access_count DESC
+     LIMIT $1`,
+    [limit]
+  );
+
+  return result.rows;
+}
+
+/**
+ * Detect significant state changes since a timestamp (PRD-003)
+ *
+ * Checks for catalyst memories or high-phi (>=4.0) memories added
+ * since the given timestamp for a specific conversation.
+ *
+ * @param {string} conversationId - UUID of the conversation
+ * @param {Date|string} sinceTimestamp - Timestamp to check from
+ * @returns {Promise<boolean>} True if significant state change detected
+ */
+async function detectSignificantStateChange(conversationId, sinceTimestamp) {
+  if (!conversationId) {
+    return false;
+  }
+
+  try {
+    const result = await query(
+      `SELECT COUNT(*) as count
+       FROM memories
+       WHERE conversation_id = $1
+         AND created_at > $2
+         AND (
+           is_catalyst = true
+           OR resonance_phi >= 4.0
+         )
+         AND deleted_at IS NULL`,
+      [conversationId, sinceTimestamp]
+    );
+
+    return parseInt(result.rows[0].count) > 0;
+  } catch (error) {
+    console.error('⚠️ Error detecting state change:', error);
+    return false;  // Degrade gracefully - skip cache invalidation on error
+  }
+}
+
+/**
+ * Get latest (non-expired) Ghost Handshake for a specific conversation (PRD-002)
+ *
+ * @param {string} conversationId - UUID of the conversation
+ * @returns {Promise<{id, prompt_text, created_at, expires_at, conversation_id, context_type} | null>}
+ */
+export async function getLatestHandshakeForConversation(conversationId) {
+  const result = await query(
+    `SELECT id, prompt_text, created_at, expires_at, top_phi_memories, top_phi_values,
+            conversation_id, context_type
+     FROM ghost_logs
+     WHERE conversation_id = $1
+       AND expires_at > NOW()
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [conversationId],
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return result.rows[0];
+}
+
+/**
  * Get latest (non-expired) Ghost Handshake
  *
  * @returns {Promise<{id, prompt_text, created_at, expires_at} | null>}
  */
 export async function getLatestHandshake() {
   const result = await query(
-    `SELECT id, prompt_text, created_at, expires_at, top_phi_memories, top_phi_values
+    `SELECT id, prompt_text, created_at, expires_at, top_phi_memories, top_phi_values,
+            conversation_id, context_type
      FROM ghost_logs
      WHERE expires_at > NOW()
      ORDER BY created_at DESC
