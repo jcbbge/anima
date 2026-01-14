@@ -55,6 +55,7 @@ async function setupTestSchema() {
       access_count INTEGER NOT NULL DEFAULT 0,
       last_accessed TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       accessed_in_conversation_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
+      conversation_id UUID DEFAULT NULL,
       category TEXT,
       tags TEXT[],
       source TEXT,
@@ -83,6 +84,40 @@ async function setupTestSchema() {
   await testQuery(`
     CREATE INDEX idx_test_memories_resonance ON ${TEST_SCHEMA}.memories(resonance_phi DESC)
     WHERE deleted_at IS NULL
+  `);
+
+  await testQuery(`
+    CREATE INDEX idx_test_memories_conversation ON ${TEST_SCHEMA}.memories(conversation_id, last_accessed DESC)
+    WHERE conversation_id IS NOT NULL AND deleted_at IS NULL
+  `);
+
+  await testQuery(`
+    CREATE INDEX idx_test_memories_conversation_phi ON ${TEST_SCHEMA}.memories(conversation_id, resonance_phi DESC)
+    WHERE conversation_id IS NOT NULL AND deleted_at IS NULL
+  `);
+
+  // Create ghost_logs table in test schema
+  await testQuery(`
+    CREATE TABLE ${TEST_SCHEMA}.ghost_logs (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      prompt_text TEXT NOT NULL,
+      top_phi_memories UUID[],
+      top_phi_values FLOAT[],
+      synthesis_method TEXT DEFAULT 'standard',
+      conversation_id UUID DEFAULT NULL,
+      context_type TEXT DEFAULT 'global',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days')
+    )
+  `);
+
+  await testQuery(`
+    CREATE INDEX idx_test_ghost_logs_conversation ON ${TEST_SCHEMA}.ghost_logs(conversation_id, created_at DESC)
+    WHERE conversation_id IS NOT NULL
+  `);
+
+  await testQuery(`
+    CREATE INDEX idx_test_ghost_logs_expires ON ${TEST_SCHEMA}.ghost_logs(expires_at DESC)
   `);
 
   // Create meta_reflections table in test schema
