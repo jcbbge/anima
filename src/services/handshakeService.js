@@ -547,7 +547,7 @@ export async function getLatestHandshakeForConversation(conversationId) {
 }
 
 /**
- * Get latest (non-expired) Ghost Handshake
+ * Get latest (non-expired) Ghost Handshake (global only, not conversation-specific)
  *
  * @returns {Promise<{id, prompt_text, created_at, expires_at} | null>}
  */
@@ -557,6 +557,7 @@ export async function getLatestHandshake() {
             conversation_id, context_type
      FROM ghost_logs
      WHERE expires_at > NOW()
+       AND conversation_id IS NULL
      ORDER BY created_at DESC
      LIMIT 1`,
     [],

@@ -144,6 +144,7 @@ memories.get(
         {
           memories: result.memories,
           distribution: result.distribution,
+          ghostHandshake: result.ghostHandshake,
         },
         200
       );

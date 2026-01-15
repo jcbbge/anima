@@ -20,6 +20,7 @@ import {
   findSemanticDuplicate,
   mergeIntoSemanticCentroid,
 } from "./semanticConsolidationService.js";
+import { generateHandshake } from "./handshakeService.js";
 import { getConfig } from "../config/environment.js";
 
 /**
@@ -438,7 +439,25 @@ export async function loadBootstrap(bootstrapData) {
     total: result.rows.length,
   };
 
-  return { memories, distribution };
+  // Generate Ghost Handshake (with error handling)
+  let ghostHandshake = null;
+  try {
+    const handshake = await generateHandshake({ conversationId });
+    ghostHandshake = {
+      id: handshake.ghostId,
+      promptText: handshake.promptText,
+      createdAt: handshake.createdAt,
+      isExisting: handshake.isExisting,
+      conversationId: handshake.conversationId,
+      contextType: handshake.contextType,
+      cachedFor: handshake.cachedFor,
+    };
+  } catch (error) {
+    console.error('Failed to generate Ghost Handshake:', error);
+    // Continue without handshake - memories are more critical
+  }
+
+  return { memories, distribution, ghostHandshake };
 }
 
 /**
