@@ -16,14 +16,24 @@
  */
 export const SubstrateMap = {
   // Primary encoder configuration
-  PRIMARY_ENCODER: process.env.CORE_EMBEDDING_PROVIDER || process.env.EMBEDDING_PROVIDER || 'local',
-  PRIMARY_ENCODER_URL: process.env.CORE_ENCODER_URL || process.env.CORE_ENCODER_URL || 'http://localhost:7102',
-  PRIMARY_ENCODER_MODEL: process.env.CORE_EMBEDDING_MODEL || 'nomic-embed-text',
+  PRIMARY_ENCODER:
+    process.env.CORE_EMBEDDING_PROVIDER ||
+    process.env.EMBEDDING_PROVIDER ||
+    "local",
+  PRIMARY_ENCODER_URL:
+    process.env.CORE_ENCODER_URL ||
+    process.env.CORE_ENCODER_URL ||
+    "http://localhost:7102",
+  PRIMARY_ENCODER_MODEL: process.env.CORE_EMBEDDING_MODEL || "nomic-embed-text",
 
   // Secondary encoder configuration (fallback)
   SECONDARY_ENCODER: process.env.FALLBACK_EMBEDDING_PROVIDER || null,
-  SECONDARY_ENCODER_KEY: process.env.SECONDARY_ENCODER_KEY || process.env.SECONDARY_ENCODER_KEY || null,
-  SECONDARY_ENCODER_MODEL: process.env.FALLBACK_EMBEDDING_MODEL || 'text-embedding-3-small',
+  SECONDARY_ENCODER_KEY:
+    process.env.SECONDARY_ENCODER_KEY ||
+    process.env.SECONDARY_ENCODER_KEY ||
+    null,
+  SECONDARY_ENCODER_MODEL:
+    process.env.FALLBACK_EMBEDDING_MODEL || "text-embedding-3-small",
 
   // Encoding specifications
   TARGET_DIMENSIONS: 768,
@@ -45,7 +55,7 @@ export class SubstrateProvider {
    * @abstract
    */
   async generateEmbedding(text, options) {
-    throw new Error('SubstrateProvider.generateEmbedding must be implemented');
+    throw new Error("SubstrateProvider.generateEmbedding must be implemented");
   }
 
   /**
@@ -53,7 +63,7 @@ export class SubstrateProvider {
    * @abstract
    */
   async checkAvailability() {
-    throw new Error('SubstrateProvider.checkAvailability must be implemented');
+    throw new Error("SubstrateProvider.checkAvailability must be implemented");
   }
 }
 
@@ -64,7 +74,7 @@ export class SubstrateProvider {
  */
 export class LocalSubstrateProvider extends SubstrateProvider {
   async generateEmbedding(text, options = {}) {
-    const axios = (await import('axios')).default;
+    const axios = (await import("axios")).default;
     const {
       model = this.config.model,
       timeout = 5000,
@@ -83,23 +93,23 @@ export class LocalSubstrateProvider extends SubstrateProvider {
           },
           {
             timeout,
-            headers: { 'Content-Type': 'application/json' },
-          }
+            headers: { "Content-Type": "application/json" },
+          },
         );
 
         if (!response.data || !response.data.embedding) {
-          throw new Error('Invalid response from local substrate');
+          throw new Error("Invalid response from local substrate");
         }
 
         const embedding = response.data.embedding;
 
         if (!Array.isArray(embedding)) {
-          throw new Error('Embedding must be an array');
+          throw new Error("Embedding must be an array");
         }
 
         if (embedding.length !== SubstrateMap.TARGET_DIMENSIONS) {
           throw new Error(
-            `Expected ${SubstrateMap.TARGET_DIMENSIONS} dimensions, got ${embedding.length}`
+            `Expected ${SubstrateMap.TARGET_DIMENSIONS} dimensions, got ${embedding.length}`,
           );
         }
 
@@ -111,21 +121,21 @@ export class LocalSubstrateProvider extends SubstrateProvider {
           const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
           console.warn(
             `Local substrate attempt ${attempt} failed, retrying in ${backoffMs}ms:`,
-            error.message
+            error.message,
           );
-          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
         }
       }
     }
 
     throw new Error(
-      `Local substrate unavailable after ${maxRetries} attempts: ${lastError.message}`
+      `Local substrate unavailable after ${maxRetries} attempts: ${lastError.message}`,
     );
   }
 
   async checkAvailability() {
     try {
-      await this.generateEmbedding('test', { timeout: 2000, maxRetries: 1 });
+      await this.generateEmbedding("test", { timeout: 2000, maxRetries: 1 });
       return { available: true };
     } catch (error) {
       return { available: false, error: error.message };
@@ -140,7 +150,7 @@ export class LocalSubstrateProvider extends SubstrateProvider {
  */
 export class RemoteSubstrateProvider extends SubstrateProvider {
   async generateEmbedding(text, options = {}) {
-    const axios = (await import('axios')).default;
+    const axios = (await import("axios")).default;
     const {
       model = this.config.model,
       timeout = 10000,
@@ -148,17 +158,20 @@ export class RemoteSubstrateProvider extends SubstrateProvider {
     } = options;
 
     if (!this.config.apiKey) {
-      throw new Error('Remote substrate API key not configured');
+      throw new Error("Remote substrate API key not configured");
     }
 
     try {
       // Remote substrate endpoint (configured via environment or defaults to encoded endpoint)
       const defaultEndpoint = Buffer.from(
-        'aHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MS9lbWJlZGRpbmdz',
-        'base64'
-      ).toString('utf-8');
+        "aHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MS9lbWJlZGRpbmdz",
+        "base64",
+      ).toString("utf-8");
 
-      const endpoint = this.config.endpoint || process.env.REMOTE_SUBSTRATE_ENDPOINT || defaultEndpoint;
+      const endpoint =
+        this.config.endpoint ||
+        process.env.REMOTE_SUBSTRATE_ENDPOINT ||
+        defaultEndpoint;
 
       const response = await axios.post(
         endpoint,
@@ -170,14 +183,14 @@ export class RemoteSubstrateProvider extends SubstrateProvider {
         {
           timeout,
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.config.apiKey}`,
           },
-        }
+        },
       );
 
       if (!response.data || !response.data.data || !response.data.data[0]) {
-        throw new Error('Invalid response from remote substrate');
+        throw new Error("Invalid response from remote substrate");
       }
 
       return response.data.data[0].embedding;
@@ -188,7 +201,7 @@ export class RemoteSubstrateProvider extends SubstrateProvider {
 
   async checkAvailability() {
     try {
-      await this.generateEmbedding('test', { timeout: 2000 });
+      await this.generateEmbedding("test", { timeout: 2000 });
       return { available: true };
     } catch (error) {
       return { available: false, error: error.message };
@@ -202,10 +215,10 @@ export class RemoteSubstrateProvider extends SubstrateProvider {
  * Creates the appropriate substrate provider based on configuration.
  */
 export function createSubstrateProvider(type, config) {
-  // Treat 'local' as local substrate
-  if (type === 'local') {
+  // Treat 'local' and 'ollama' as local substrate
+  if (type === "local" || type === "ollama") {
     return new LocalSubstrateProvider(config);
-  } else if (type === 'remote' || type === 'alpha') {
+  } else if (type === "remote" || type === "alpha") {
     return new RemoteSubstrateProvider(config);
   } else {
     throw new Error(`Unknown substrate type: ${type}`);
