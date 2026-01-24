@@ -47,51 +47,27 @@ export const queryMemoriesSchema = z.object({
     .string()
     .min(1, 'Query cannot be empty')
     .max(5000, 'Query cannot exceed 5,000 characters'),
-  
+
   limit: z
     .number()
     .int()
     .positive()
     .max(100)
     .default(20),
-  
+
   similarityThreshold: z
     .number()
     .min(0)
     .max(1)
     .default(0.7),
-  
+
   tiers: z
     .array(z.enum(['active', 'thread', 'stable', 'network']))
     .optional(),
-  
+
   conversationId: z
     .string()
     .optional(),
-  
-  limit: z
-    .string()
-    .transform(Number)
-    .pipe(z.number().int().positive().max(200))
-    .default('50'),
-  
-  includeActive: z
-    .string()
-    .transform(val => val === 'true')
-    .pipe(z.boolean())
-    .default('true'),
-  
-  includeThread: z
-    .string()
-    .transform(val => val === 'true')
-    .pipe(z.boolean())
-    .default('true'),
-  
-  includeStable: z
-    .string()
-    .transform(val => val === 'true')
-    .pipe(z.boolean())
-    .default('true'),
 });
 
 /**
