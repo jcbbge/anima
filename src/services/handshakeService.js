@@ -17,9 +17,9 @@ import { query, getDatabaseSchema } from "../config/database.js";
  * Cache window constants for tiered caching strategy (PRD-003)
  */
 const CACHE_WINDOWS = {
-  PER_CONVERSATION: 15 * 60 * 1000,    // 15 minutes
-  PER_SESSION: 60 * 60 * 1000,          // 1 hour
-  GLOBAL: 24 * 60 * 60 * 1000,          // 24 hours
+  PER_CONVERSATION: 15 * 60 * 1000, // 15 minutes
+  PER_SESSION: 60 * 60 * 1000, // 1 hour
+  GLOBAL: 24 * 60 * 60 * 1000, // 24 hours
 };
 
 /**
@@ -54,18 +54,18 @@ export async function generateHandshake(options = {}) {
   if (!force) {
     let recentGhost = null;
     let cacheWindow = CACHE_WINDOWS.GLOBAL;
-    let cacheReason = 'global_fallback';
+    let cacheReason = "global_fallback";
 
     // Tier 1: Try conversation-specific cache (15 minutes)
     if (conversationId) {
       recentGhost = await getLatestHandshakeForConversation(conversationId);
       cacheWindow = CACHE_WINDOWS.PER_CONVERSATION;
-      cacheReason = 'per_conversation';
+      cacheReason = "per_conversation";
     } else {
       // No conversation ID: use global cache (24 hours)
       recentGhost = await getLatestHandshake();
       cacheWindow = CACHE_WINDOWS.GLOBAL;
-      cacheReason = 'global_fallback';
+      cacheReason = "global_fallback";
     }
 
     if (recentGhost) {
@@ -74,20 +74,24 @@ export async function generateHandshake(options = {}) {
       // Check for significant state changes (catalysts or high-phi memories)
       const hasStateChange = await detectSignificantStateChange(
         conversationId,
-        recentGhost.created_at
+        recentGhost.created_at,
       );
 
       // Return cached ghost if within window and no state changes
       if (ghostAge < cacheWindow && !hasStateChange) {
-        console.log(`📋 Using cached ghost (age: ${ghostAge}ms, reason: ${cacheReason}, conv: ${conversationId || 'global'})`);
+        console.log(
+          `📋 Using cached ghost (age: ${ghostAge}ms, reason: ${cacheReason}, conv: ${conversationId || "global"})`,
+        );
         return {
           promptText: recentGhost.prompt_text,
           topMemories: recentGhost.top_phi_memories || [],
           topPhiValues: recentGhost.top_phi_values || [],
           ghostId: recentGhost.id,
+          createdAt: recentGhost.created_at,
+          expiresAt: recentGhost.expires_at,
           isExisting: true,
           conversationId: recentGhost.conversation_id,
-          contextType: recentGhost.context_type || 'global',
+          contextType: recentGhost.context_type || "global",
           cachedFor: ghostAge,
           cacheReason,
           cacheWindow,
@@ -96,11 +100,15 @@ export async function generateHandshake(options = {}) {
 
       // Log why cache was invalidated
       if (hasStateChange) {
-        console.log(`🔄 Invalidating cache due to state change (conv: ${conversationId})`);
+        console.log(
+          `🔄 Invalidating cache due to state change (conv: ${conversationId})`,
+        );
       }
 
       if (ghostAge >= cacheWindow) {
-        console.log(`⏰ Cache expired (age: ${ghostAge}ms > window: ${cacheWindow}ms)`);
+        console.log(
+          `⏰ Cache expired (age: ${ghostAge}ms > window: ${cacheWindow}ms)`,
+        );
       }
     }
   }
@@ -214,14 +222,14 @@ export async function generateHandshake(options = {}) {
        context_type
      )
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, created_at`,
+     RETURNING id, created_at, expires_at`,
     [
       synthesis,
       topMemories.map((m) => m.id),
       topMemories.map((m) => m.resonance_phi),
       "standard",
       conversationId,
-      conversationId ? 'conversation' : 'global',
+      conversationId ? "conversation" : "global",
     ],
   );
 
@@ -232,12 +240,13 @@ export async function generateHandshake(options = {}) {
   return {
     promptText: synthesis,
     topMemories,
-    topPhiValues: topMemories.map(m => m.resonance_phi),
+    topPhiValues: topMemories.map((m) => m.resonance_phi),
     ghostId: ghost.id,
     createdAt: ghost.created_at,
+    expiresAt: ghost.expires_at,
     isExisting: false,
     conversationId,
-    contextType: conversationId ? 'conversation' : 'global',
+    contextType: conversationId ? "conversation" : "global",
     cachedFor: 0,
     cacheReason: null,
     cacheWindow: null,
@@ -337,9 +346,7 @@ function extractFocus(insight) {
   }
 
   // Handle "Breakthrough in X" pattern - preserve the full context
-  const breakthroughMatch = insight.match(
-    /^breakthrough\s+in\s+(.+)/i,
-  );
+  const breakthroughMatch = insight.match(/^breakthrough\s+in\s+(.+)/i);
   if (breakthroughMatch) {
     return breakthroughMatch[1].trim().toLowerCase();
   }
@@ -435,10 +442,10 @@ function extractDreamConcepts(content) {
 }
 
 /**
- * Get top memories for a specific conversation (PRD-002)
+ * Get top memories for conversation with temporal recency weighting (PRD-005)
  *
- * Applies 2x phi boost to conversation-specific memories.
- * Falls back to high-phi global memories (>=4.0).
+ * Uses synthesis_weight: 70% phi (2x boost for conversation) + 30% recency
+ * Recency decays linearly over 30 days (1.0 → 0.1 floor)
  *
  * @param {string} conversationId - UUID of the conversation
  * @param {number} limit - Maximum number of memories to return
@@ -446,40 +453,66 @@ function extractDreamConcepts(content) {
  */
 async function getTopMemoriesForConversation(conversationId, limit) {
   const result = await query(
-    `SELECT id, content, resonance_phi, category, tier, last_accessed, created_at
+    `SELECT 
+       id, 
+       content, 
+       resonance_phi, 
+       category, 
+       tier, 
+       last_accessed, 
+       created_at,
+       GREATEST(0.1, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / (30 * 86400))) as recency_score,
+       (
+         CASE
+           WHEN conversation_id = $1 THEN COALESCE(resonance_phi, 0.0) * 2.0
+           ELSE COALESCE(resonance_phi, 0.0)
+         END * 0.7 +
+         GREATEST(0.1, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / (30 * 86400))) * 5.0 * 0.3
+       ) as synthesis_weight
      FROM memories
      WHERE deleted_at IS NULL
        AND (
          conversation_id = $1
-         OR resonance_phi >= 4.0
+         OR resonance_phi >= 3.0
        )
-     ORDER BY
-       CASE
-         WHEN conversation_id = $1 THEN resonance_phi * 2.0
-         ELSE resonance_phi
-       END DESC,
-       EXTRACT(EPOCH FROM last_accessed) DESC
+     ORDER BY synthesis_weight DESC
      LIMIT $2`,
-    [conversationId, limit]
+    [conversationId, limit],
   );
 
   return result.rows;
 }
 
 /**
- * Get top memories globally (no conversation filter)
+ * Get top memories globally with temporal recency weighting (PRD-005)
+ *
+ * Uses synthesis_weight: 70% phi + 30% recency (no conversation boost)
+ * Recency decays linearly over 30 days (1.0 → 0.1 floor)
  *
  * @param {number} limit - Maximum number of memories to return
  * @returns {Promise<Array>} Top memories globally
  */
 async function getTopMemoriesGlobal(limit) {
   const result = await query(
-    `SELECT id, content, resonance_phi, category, tier
+    `SELECT 
+       id, 
+       content, 
+       resonance_phi, 
+       category, 
+       tier,
+       last_accessed,
+       created_at,
+       GREATEST(0.1, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / (30 * 86400))) as recency_score,
+       (
+         COALESCE(resonance_phi, 0.0) * 0.7 +
+         GREATEST(0.1, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / (30 * 86400))) * 5.0 * 0.3
+       ) as synthesis_weight
      FROM memories
      WHERE deleted_at IS NULL
-     ORDER BY resonance_phi DESC, access_count DESC
+       AND resonance_phi >= 2.0
+     ORDER BY synthesis_weight DESC
      LIMIT $1`,
-    [limit]
+    [limit],
   );
 
   return result.rows;
@@ -511,13 +544,13 @@ async function detectSignificantStateChange(conversationId, sinceTimestamp) {
            OR resonance_phi >= 4.0
          )
          AND deleted_at IS NULL`,
-      [conversationId, sinceTimestamp]
+      [conversationId, sinceTimestamp],
     );
 
     return parseInt(result.rows[0].count) > 0;
   } catch (error) {
-    console.error('⚠️ Error detecting state change:', error);
-    return false;  // Degrade gracefully - skip cache invalidation on error
+    console.error("⚠️ Error detecting state change:", error);
+    return false; // Degrade gracefully - skip cache invalidation on error
   }
 }
 
@@ -530,7 +563,7 @@ async function detectSignificantStateChange(conversationId, sinceTimestamp) {
 export async function getLatestHandshakeForConversation(conversationId) {
   const result = await query(
     `SELECT id, prompt_text, created_at, expires_at, top_phi_memories, top_phi_values,
-            conversation_id, context_type
+            conversation_id, context_type, synthesis_method
      FROM ghost_logs
      WHERE conversation_id = $1
        AND expires_at > NOW()
@@ -554,7 +587,7 @@ export async function getLatestHandshakeForConversation(conversationId) {
 export async function getLatestHandshake() {
   const result = await query(
     `SELECT id, prompt_text, created_at, expires_at, top_phi_memories, top_phi_values,
-            conversation_id, context_type
+            conversation_id, context_type, synthesis_method
      FROM ghost_logs
      WHERE expires_at > NOW()
        AND conversation_id IS NULL

@@ -144,6 +144,8 @@ app.post('/manual-reflection', async (c) => {
 app.get('/handshake', async (c) => {
   try {
     let handshake = await getLatestHandshake();
+    let isExisting = false;
+    let synthesisMethod = null;
     
     // Generate if none exists
     if (!handshake) {
@@ -152,9 +154,18 @@ app.get('/handshake', async (c) => {
         id: generated.ghostId,
         prompt_text: generated.promptText,
         created_at: generated.createdAt,
+        expires_at: generated.expires_at,
         top_phi_memories: generated.topMemories.map(m => m.id),
         top_phi_values: generated.topMemories.map(m => m.resonance_phi),
+        conversation_id: generated.conversationId,
+        context_type: generated.contextType,
+        synthesis_method: 'standard',
       };
+      isExisting = generated.isExisting;
+      synthesisMethod = 'standard';
+    } else {
+      isExisting = true;
+      synthesisMethod = handshake.synthesis_method;
     }
     
     return successResponse(c, { 
@@ -163,6 +174,12 @@ app.get('/handshake', async (c) => {
         promptText: handshake.prompt_text,
         createdAt: handshake.created_at,
         expiresAt: handshake.expires_at,
+        topMemories: handshake.top_phi_memories || [],
+        topPhiValues: handshake.top_phi_values || [],
+        conversationId: handshake.conversation_id,
+        contextType: handshake.context_type || 'global',
+        synthesisMethod,
+        isExisting,
       }
     }, 200);
   } catch (error) {
@@ -200,6 +217,12 @@ app.post('/handshake/generate', async (c) => {
           phi: m.resonance_phi,
           category: m.category,
         })),
+        topPhiValues: result.topPhiValues,
+        expiresAt: result.expiresAt,
+        cachedFor: result.cachedFor,
+        cacheReason: result.cacheReason,
+        cacheWindow: result.cacheWindow,
+        synthesisMethod: 'standard',
         isExisting: result.isExisting,
         conversationId: result.conversationId,
         contextType: result.contextType,
