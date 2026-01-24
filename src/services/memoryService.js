@@ -377,7 +377,7 @@ export async function loadBootstrap(bootstrapData) {
   const threadLimit = includeThread ? Math.ceil(remaining * 0.7) : 0;
   const stableLimit = includeStable ? Math.floor(remaining * 0.3) : 0;
 
-  // NEW: Single query with window functions
+  // NEW: Single query with window functions and conversation filtering
   const sql = `
     WITH tier_limits AS (
       SELECT
@@ -385,27 +385,57 @@ export async function loadBootstrap(bootstrapData) {
         ${threadLimit}::int as thread_limit,
         ${stableLimit}::int as stable_limit
     ),
+    conversation_boost AS (
+      SELECT
+        id,
+        CASE
+          WHEN conversation_id = $1 THEN 2.0
+          WHEN resonance_phi >= 4.0 THEN 1.0
+          ELSE 0.5
+        END as boost_factor
+      FROM memories
+      WHERE deleted_at IS NULL
+    ),
     ranked_memories AS (
       SELECT
-        id, content, tier, category, tags, source,
-        access_count, resonance_phi, is_catalyst, created_at,
+        m.id,
+        m.content,
+        m.tier,
+        m.category,
+        m.tags,
+        m.source,
+        m.access_count,
+        m.resonance_phi,
+        m.is_catalyst,
+        m.created_at,
+        m.conversation_id,
+        m.last_accessed,
+        cb.boost_factor,
+        (m.resonance_phi * cb.boost_factor) as boosted_phi,
         ROW_NUMBER() OVER (
-          PARTITION BY tier
+          PARTITION BY m.tier
           ORDER BY
             CASE
-              WHEN tier = 'active' THEN EXTRACT(EPOCH FROM last_accessed)::double precision
-              WHEN tier = 'thread' THEN resonance_phi::double precision
-              WHEN tier = 'stable' THEN resonance_phi::double precision
+              WHEN m.tier = 'active' THEN EXTRACT(EPOCH FROM m.last_accessed)::double precision * cb.boost_factor
+              WHEN m.tier = 'thread' THEN m.resonance_phi::double precision * cb.boost_factor
+              WHEN m.tier = 'stable' THEN m.resonance_phi::double precision * cb.boost_factor
               ELSE 0::double precision
             END DESC
         ) as rn
-      FROM memories
-      WHERE deleted_at IS NULL
-        AND tier IN ('active', 'thread', 'stable')
+      FROM memories m
+      JOIN conversation_boost cb ON m.id = cb.id
+      WHERE m.deleted_at IS NULL
+        AND m.tier IN ('active', 'thread', 'stable')
+        AND (
+          m.conversation_id = $1
+          OR m.conversation_id IS NULL
+          OR m.resonance_phi >= 3.0
+        )
     )
     SELECT
       id, content, tier, category, tags, source,
-      access_count, resonance_phi, is_catalyst, created_at
+      access_count, resonance_phi, is_catalyst, created_at,
+      conversation_id, boosted_phi, last_accessed
     FROM ranked_memories, tier_limits
     WHERE
       (tier = 'active' AND ${includeActive} AND rn <= tier_limits.active_limit) OR
@@ -417,10 +447,11 @@ export async function loadBootstrap(bootstrapData) {
         WHEN 'thread' THEN 2::double precision
         WHEN 'stable' THEN 3::double precision
       END,
-      resonance_phi DESC
+      boosted_phi DESC,
+      last_accessed DESC
   `;
 
-  const result = await query(sql, []);
+  const result = await query(sql, [conversationId]);
 
   // Group by tier
   const memories = {
@@ -457,7 +488,18 @@ export async function loadBootstrap(bootstrapData) {
     // Continue without handshake - memories are more critical
   }
 
-  return { memories, distribution, ghostHandshake };
+  return {
+    memories,
+    distribution,
+    ghostHandshake,
+    conversationId,          // NEW: Echo conversation ID
+    filtering: {             // NEW: Filtering metadata
+      conversationSpecific: true,  // conversationId is always present (required in schema)
+      boostFactor: 2.0,
+      includeGlobalHighPhi: true,
+      minGlobalPhi: 3.0,
+    },
+  };
 }
 
 /**

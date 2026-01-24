@@ -67,17 +67,7 @@ export const queryMemoriesSchema = z.object({
   
   conversationId: z
     .string()
-    .uuid('Conversation ID must be a valid UUID')
     .optional(),
-});
-
-/**
- * Schema for bootstrap context loading (query params)
- */
-export const bootstrapSchema = z.object({
-  conversationId: z
-    .string()
-    .uuid('Conversation ID must be a valid UUID'),
   
   limit: z
     .string()
@@ -97,6 +87,39 @@ export const bootstrapSchema = z.object({
     .pipe(z.boolean())
     .default('true'),
   
+  includeStable: z
+    .string()
+    .transform(val => val === 'true')
+    .pipe(z.boolean())
+    .default('true'),
+});
+
+/**
+ * Schema for bootstrap endpoint (query params)
+ */
+export const bootstrapSchema = z.object({
+  conversationId: z
+    .string()
+    .optional(),
+
+  limit: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().positive().max(200))
+    .default('50'),
+
+  includeActive: z
+    .string()
+    .transform(val => val === 'true')
+    .pipe(z.boolean())
+    .default('true'),
+
+  includeThread: z
+    .string()
+    .transform(val => val === 'true')
+    .pipe(z.boolean())
+    .default('true'),
+
   includeStable: z
     .string()
     .transform(val => val === 'true')

@@ -145,6 +145,8 @@ memories.get(
           memories: result.memories,
           distribution: result.distribution,
           ghostHandshake: result.ghostHandshake,
+          conversationId: result.conversationId,
+          filtering: result.filtering,
         },
         200
       );
