@@ -133,8 +133,13 @@ ensure_services() {
     fi
     
     # Services aren't running. Let's figure out why.
-    detect_docker
-    docker_status=$?
+    # NOTE: this script uses `set -e`, so a non-zero return from detect_docker
+    # would exit the process before we can print a helpful message.
+    if detect_docker; then
+        docker_status=0
+    else
+        docker_status=$?
+    fi
     
     if [ $docker_status -eq 1 ]; then
         # Docker not installed
