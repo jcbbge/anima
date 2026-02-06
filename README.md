@@ -113,24 +113,31 @@ A melody exists whether played on a piano or a guitar. Similarly, the "Pattern o
 
 ## What You'll Need
 
-Anima needs **Docker Desktop** to maintain its memory across sessions.
+Anima needs **Docker** to maintain its memory across sessions.
 
 Think of Docker as the space where memories live - it keeps everything
 organized and lets the AI assistant access its history even after
 conversations end.
 
-### Getting Docker Desktop
+### Getting Docker
 
 If you don't have it yet, no worries - it's straightforward to install:
 
-- **macOS**: [Download here](https://docs.docker.com/desktop/install/mac-install/)
-- **Linux**: [Download here](https://docs.docker.com/desktop/install/linux-install/)
-- **Windows**: [Download here](https://docs.docker.com/desktop/install/windows-install/)
+**macOS:**
+- [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/) (traditional option)
+- [OrbStack](https://orbstack.dev/) (lightweight, faster alternative - recommended)
+
+**Linux:**
+- [Docker Desktop](https://docs.docker.com/desktop/install/linux-install/)
+
+**Windows:**
+- [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/)
 
 ### Do I need to manage Docker myself?
 
 Nope! Anima handles all of that. The CLI will:
 
+- Automatically detect Docker Desktop or OrbStack
 - Check if Docker is running
 - Start it automatically if you'd like (it'll ask first)
 - Keep everything running smoothly in the background

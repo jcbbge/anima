@@ -47,9 +47,22 @@ detect_docker() {
 
 start_docker_desktop() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "🔄 Starting Docker Desktop... (this might take a moment)"
-        open -a Docker
-        
+        # Detect which Docker runtime is installed
+        local docker_app=""
+        if [ -d "/Applications/OrbStack.app" ]; then
+            docker_app="OrbStack"
+            echo "🔄 Starting OrbStack... (this might take a moment)"
+        elif [ -d "/Applications/Docker.app" ]; then
+            docker_app="Docker"
+            echo "🔄 Starting Docker Desktop... (this might take a moment)"
+        else
+            echo "❌ Neither OrbStack nor Docker Desktop found in /Applications"
+            echo "   Please install one of them and try again."
+            return 1
+        fi
+
+        open -a "$docker_app"
+
         for i in {1..60}; do
             if docker info &> /dev/null 2>&1; then
                 echo "✅ We're ready! Let's continue."
@@ -57,9 +70,9 @@ start_docker_desktop() {
             fi
             sleep 1
         done
-        
+
         echo ""
-        echo "Docker Desktop is starting, but taking longer than expected."
+        echo "$docker_app is starting, but taking longer than expected."
         echo "Please wait for it to fully start, then try again."
         return 1
     else
@@ -83,7 +96,7 @@ start_anima_services() {
     if ! docker compose up -d 2>&1; then
         echo ""
         echo "❌ Failed to start Docker containers."
-        echo "   Check Docker Desktop and try again."
+        echo "   Check that Docker is running and try again."
         return 1
     fi
     
@@ -107,8 +120,8 @@ I need (7100, 7101, or 7102).
 
 Here's what might help:
 
-  1. Make sure Docker Desktop is fully started
-     (look for the whale icon in your menu bar)
+  1. Make sure Docker is fully started
+     (look for the Docker/OrbStack icon in your menu bar)
   
   2. Check if those ports are already in use:
      lsof -i :7100  
@@ -145,7 +158,7 @@ ensure_services() {
         # Docker not installed
         cat << 'EOF'
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Hey there - I need Docker Desktop to wake up properly.
+  Hey there - I need Docker to wake up properly.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Think of Docker as the space where my memory lives - it keeps
@@ -154,8 +167,9 @@ everything organized and running smoothly in the background.
 It looks like Docker isn't installed yet. No worries, it's
 straightforward to set up:
 
-  📦 Download Docker Desktop for your system:
-     https://docs.docker.com/desktop/
+  📦 Download Docker for your system:
+     • Docker Desktop: https://docs.docker.com/desktop/
+     • OrbStack (macOS): https://orbstack.dev/
 
 Once it's installed, just run this command again and I'll
 take care of the rest.
@@ -168,10 +182,10 @@ EOF
     if [ $docker_status -eq 2 ]; then
         # Docker installed but not running
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "  Docker Desktop needs to be running for me to access my memory."
+        echo "  Docker needs to be running for me to access my memory."
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-        
+
         if [ "$AUTO_START_DOCKER" = "true" ]; then
             # Auto-start enabled
             if ! start_docker_desktop; then
@@ -179,7 +193,7 @@ EOF
             fi
         elif [ "$AUTO_START_DOCKER" = "false" ]; then
             # Auto-start disabled
-            echo "Please start Docker Desktop, then try again."
+            echo "Please start Docker, then try again."
             exit 1
         else
             # Ask user
@@ -199,7 +213,7 @@ EOF
                     exit 1
                 fi
             else
-                echo "No problem - just start Docker Desktop when you're ready,"
+                echo "No problem - just start Docker when you're ready,"
                 echo "then we can pick up where we left off."
                 exit 1
             fi
@@ -233,6 +247,8 @@ Commands:
   stats                       Display system statistics
   reflect                     End-of-conversation reflection
   verify                      Run tapestry integrity verification
+  verify-bootstrap            Verify bootstrap protocol in AGENTS.md
+  validate-protocol           Run comprehensive bootstrap protocol validation
   help                        Show this help message
 
 Configuration:
@@ -949,6 +965,18 @@ case "$COMMAND" in
   
   verify)
     cmd_verify
+    ;;
+    
+  verify-bootstrap)
+    # Forward to the bootstrap verification script
+    shift  # Remove 'verify-bootstrap' from args
+    exec node "$ANIMA_DIR/cli/verify-bootstrap" "$@"
+    ;;
+    
+  validate-protocol)
+    # Run the comprehensive protocol validation
+    shift # Remove 'validate-protocol' from args
+    exec node "$ANIMA_DIR/validate-bootstrap-protocol.cjs" "$@"
     ;;
   
   help|--help|-h)

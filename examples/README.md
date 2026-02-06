@@ -153,7 +153,7 @@ bun dev
 ```
 
 ### "Docker not running"
-Start Docker Desktop and run setup:
+Start Docker (Docker Desktop or OrbStack) and run setup:
 ```bash
 ./setup.sh
 ```

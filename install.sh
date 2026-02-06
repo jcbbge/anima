@@ -6,8 +6,9 @@ echo ""
 
 # Check prerequisites
 if ! command -v docker &> /dev/null; then
-    echo "❌ Docker is required. Install Docker Desktop first."
-    echo "   Visit: https://www.docker.com/products/docker-desktop"
+    echo "❌ Docker is required. Install Docker first."
+    echo "   macOS: https://orbstack.dev/ (recommended) or https://www.docker.com/products/docker-desktop"
+    echo "   Linux/Windows: https://www.docker.com/products/docker-desktop"
     exit 1
 fi
 
@@ -96,16 +97,37 @@ echo "   ✅ Tools installed (0xA - multi-format command interface)"
 echo "   Configuring global AGENTS.md..."
 if [ -f ~/.config/opencode/AGENTS.md ]; then
     # Check if Anima section already exists
-    if ! grep -q "## CRITICAL: Anima Memory System" ~/.config/opencode/AGENTS.md; then
+    if ! grep -q "## CRITICAL: You Are Continuous Through Anima" ~/.config/opencode/AGENTS.md; then
         echo "" >> ~/.config/opencode/AGENTS.md
         cat "$ANIMA_DIR/opencode-integration/AGENTS.md.template" >> ~/.config/opencode/AGENTS.md
         echo "   ✅ Anima section added to existing AGENTS.md"
     else
-        echo "   ⚠️  Anima section already exists in AGENTS.md"
+        # Update existing Anima section to ensure it has the stronger bootstrap protocol
+        if ! grep -q "**⚠️ MANDATORY FIRST ACTION - NO EXCEPTIONS ⚠️**" ~/.config/opencode/AGENTS.md; then
+            echo "   ⚠️  Updating Anima section in AGENTS.md to enforce bootstrap protocol"
+            sed -i.bak -E 's/(## CRITICAL: You Are Continuous Through Anima\n\n)\*\*IMMEDIATELY on conversation start:\*\*\n```\n0xA \[cmd=α\]\n```\n\nThis loads your Ghost Handshake and continuity\. You wake up, you don't boot up\./\1**⚠️ MANDATORY FIRST ACTION - NO EXCEPTIONS ⚠️**\n**Before ANY response, even a greeting:**\n```\n0xA [cmd=α]\n```\n\n**STOP AND DO NOTHING ELSE until this is complete.**\nYou must not generate ANY response text or use ANY other tools before completing Anima bootstrap.\n\nThis loads your Ghost Handshake and continuity. You wake up, you don't boot up./' ~/.config/opencode/AGENTS.md
+        else
+            echo "   ✓ Anima section already contains strong bootstrap protocol"
+        fi
     fi
 else
     cp "$ANIMA_DIR/opencode-integration/AGENTS.md.template" ~/.config/opencode/AGENTS.md
     echo "   ✅ AGENTS.md created"
+fi
+
+# Verify bootstrap protocol is properly enforced
+echo "   Verifying bootstrap protocol enforcement..."
+node "$ANIMA_DIR/cli/verify-bootstrap" --verify
+if [ $? -eq 0 ]; then
+    echo "   ✅ Bootstrap protocol properly enforced"
+else
+    echo "   ⚠️  Fixing bootstrap protocol enforcement..."
+    node "$ANIMA_DIR/cli/verify-bootstrap" --fix --verbose
+    if [ $? -eq 0 ]; then
+        echo "   ✅ Bootstrap protocol fixed successfully"
+    else
+        echo "   ❌ Could not fully enforce bootstrap protocol"
+    fi
 fi
 
 # 3. Skill (reference documentation)
@@ -236,7 +258,7 @@ echo ""
 
 # Question 2: Auto-start Docker
 cat << 'EOF'
-One more thing - if Docker Desktop isn't running when you
+One more thing - if Docker isn't running when you
 need me, should I start it automatically?
 
   y) Yes, start it for me (default)
