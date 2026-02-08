@@ -4,11 +4,28 @@
  * Creates isolated test schema and provides utilities for test data management.
  */
 
-import pg from 'pg';
-import { getConfig } from '../../src/config/environment.js';
+import { SQL } from "bun";
+import { getConfig } from "../../src/config/environment.ts";
+import { enhanceSqlInstance } from "../../src/config/database.ts";
 
-const { Pool } = pg;
 const config = getConfig();
+
+function createTestSql() {
+  return enhanceSqlInstance(new SQL({ url: config.database.url, max: 5 }));
+}
+
+let testSql = createTestSql();
+
+function parseRow(row) {
+  if (row && typeof row.metadata === "string") {
+    try {
+      row.metadata = JSON.parse(row.metadata);
+    } catch {
+      // ignore parse errors, leave as string
+    }
+  }
+  return row;
+}
 
 // Test schema name (isolated from production)
 const TEST_SCHEMA = 'test_semantic_consolidation';
@@ -16,20 +33,9 @@ const TEST_SCHEMA = 'test_semantic_consolidation';
 /**
  * Create test database pool
  */
-const testPool = new Pool({
-  host: config.database.host,
-  port: config.database.port,
-  database: config.database.database,
-  user: config.database.user,
-  password: config.database.password,
-  max: 5,
-});
-
-/**
- * Execute query in test schema
- */
-async function testQuery(text, params) {
-  return await testPool.query(text, params);
+async function testQuery(text, params = []) {
+  const rows = await testSql.unsafe(text, params);
+  return { rows };
 }
 
 /**
@@ -179,7 +185,7 @@ async function insertTestMemory({
   const result = await testQuery(
     `INSERT INTO ${TEST_SCHEMA}.memories
       (content, content_hash, embedding, resonance_phi, is_catalyst, metadata, category, tags, source)
-     VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9)
+     VALUES ($1, $2, $3::vector, $4, $5, $6::jsonb, $7, $8, $9)
      RETURNING *`,
     [
       content,
@@ -187,14 +193,16 @@ async function insertTestMemory({
       JSON.stringify(embedding),
       resonancePhi,
       isCatalyst,
-      metadata ? JSON.stringify(metadata) : null,
+      metadata ?? null,
       category,
-      tags,
+      Array.isArray(tags) && tags.length > 0
+        ? testSql.array(tags, "TEXT")
+        : testSql.array([], "TEXT"),
       source,
     ]
   );
 
-  return result.rows[0];
+  return parseRow(result.rows[0]);
 }
 
 /**
@@ -205,7 +213,7 @@ async function findTestMemoryById(id) {
     `SELECT * FROM ${TEST_SCHEMA}.memories WHERE id = $1`,
     [id]
   );
-  return result.rows[0];
+  return parseRow(result.rows[0]);
 }
 
 /**
@@ -215,7 +223,7 @@ async function getAllTestMemories() {
   const result = await testQuery(
     `SELECT * FROM ${TEST_SCHEMA}.memories WHERE deleted_at IS NULL ORDER BY created_at DESC`
   );
-  return result.rows;
+  return result.rows.map((row) => parseRow(row));
 }
 
 /**
@@ -232,7 +240,8 @@ async function countTestMemories() {
  * Close test pool
  */
 async function closeTestPool() {
-  await testPool.end();
+  await testSql.close();
+  testSql = createTestSql();
 }
 
 /**

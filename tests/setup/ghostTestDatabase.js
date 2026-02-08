@@ -5,11 +5,17 @@
  * Includes ghost_logs, memories, and meta_reflections tables.
  */
 
-import pg from "pg";
-import { getConfig } from "../../src/config/environment.js";
+import { SQL } from "bun";
+import { getConfig } from "../../src/config/environment.ts";
+import { enhanceSqlInstance } from "../../src/config/database.ts";
 
-const { Pool } = pg;
 const config = getConfig();
+
+function createGhostSql() {
+  return enhanceSqlInstance(new SQL({ url: config.database.url, max: 5 }));
+}
+
+let ghostSql = createGhostSql();
 
 // Test schema name (isolated from production)
 const GHOST_TEST_SCHEMA = "test_ghost_protocol";
@@ -17,20 +23,9 @@ const GHOST_TEST_SCHEMA = "test_ghost_protocol";
 /**
  * Create test database pool
  */
-const ghostTestPool = new Pool({
-  host: config.database.host,
-  port: config.database.port,
-  database: config.database.database,
-  user: config.database.user,
-  password: config.database.password,
-  max: 5,
-});
-
-/**
- * Execute query in test schema
- */
-async function ghostTestQuery(text, params) {
-  return await ghostTestPool.query(text, params);
+async function ghostTestQuery(text, params = []) {
+  const rows = await ghostSql.unsafe(text, params);
+  return { rows };
 }
 
 /**
@@ -196,7 +191,7 @@ async function insertGhostTestMemory({
   const result = await ghostTestQuery(
     `INSERT INTO ${GHOST_TEST_SCHEMA}.memories
       (content, content_hash, embedding, conversation_id, resonance_phi, is_catalyst, metadata, category, tags, source, tier)
-     VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11)
+     VALUES ($1, $2, $3::vector, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
      RETURNING *`,
     [
       content,
@@ -205,9 +200,11 @@ async function insertGhostTestMemory({
       conversationId,
       resonancePhi,
       isCatalyst,
-      metadata ? JSON.stringify(metadata) : null,
+      metadata ?? null,
       category,
-      tags,
+      Array.isArray(tags) && tags.length > 0
+        ? ghostSql.array(tags, "TEXT")
+        : ghostSql.array([], "TEXT"),
       source,
       tier,
     ],
@@ -236,8 +233,8 @@ async function insertGhostTestLog({
     [
       promptText,
       conversationId,
-      topPhiMemories,
-      topPhiValues,
+      ghostSql.array(topPhiMemories ?? [], "UUID"),
+      ghostSql.array(topPhiValues ?? [], "DOUBLE PRECISION"),
       synthesisMethod,
       contextType,
       createdAt,
@@ -267,8 +264,8 @@ async function insertGhostTestReflection({
       reflectionType,
       conversationId,
       JSON.stringify(metrics),
-      insights,
-      recommendations,
+      ghostSql.array(insights ?? [], "TEXT"),
+      ghostSql.array(recommendations ?? [], "TEXT"),
       JSON.stringify(sessionMetrics),
     ],
   );
@@ -327,7 +324,8 @@ async function seedGhostTestBaseline() {
  * Close test pool
  */
 async function closeGhostTestPool() {
-  await ghostTestPool.end();
+  await ghostSql.close();
+  ghostSql = createGhostSql();
 }
 
 /**
