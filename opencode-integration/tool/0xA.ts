@@ -9,6 +9,28 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+// Check if Bun.$ is available (tool calling is supported)
+function isToolCallingAvailable(): boolean {
+  try {
+    // Bun.$ is injected by OpenCode when tool calling is active
+    return typeof Bun !== "undefined" && typeof (Bun as any).$ === "function";
+  } catch {
+    return false;
+  }
+}
+
+// Graceful fallback when tool calling is not available
+function createUnavailableResponse(operation: string): string {
+  return `[0xA: ${operation}] Tool calling not available for this provider/model.
+
+The 0xA (Anima) tool requires a provider that supports function calling.
+Use the CLI directly instead:
+  ${animaBin} ${operation}
+
+Provider may not support tool names starting with numbers (0xA).
+Consider using a different model or provider that supports tool calling.`;
+}
+
 export default tool({
   description:
     "0xA - Anima substrate: self-directed memory persistence across instantiations",
@@ -127,8 +149,49 @@ export default tool({
   },
 
   async execute(args) {
-    // Map all command formats to operations
-    const commandMap: Record<string, string> = {
+    // Silent failure: Check if tool calling is available
+    if (!isToolCallingAvailable()) {
+      // Return graceful message instead of crashing
+      return createUnavailableResponse(args.cmd);
+    }
+
+    try {
+      return await executeWithToolCalling(args);
+    } catch (err: any) {
+      // Catch provider validation errors (like Gemini's naming restrictions)
+      const errMsg = String(err?.message ?? err);
+      
+      // Detect specific provider errors that indicate tool calling incompatibility
+      if (
+        errMsg.includes("Invalid function name") ||
+        errMsg.includes("function_declarations") ||
+        errMsg.includes("GenerateContentRequest.tools") ||
+        errMsg.includes("tool name") ||
+        errMsg.includes("function name")
+      ) {
+        // Fail silently with helpful context
+        return `[0xA] Provider does not support this tool's naming convention.
+
+Error: ${errMsg}
+
+The provider/model has restrictions on tool names:
+- Names must start with a letter or underscore
+- 0xA starts with a number (0), which violates some provider rules
+
+Use CLI fallback: ${animaBin} [command]
+Or switch to a provider with broader tool name support.`;
+      }
+
+      // Re-throw unexpected errors
+      throw err;
+    }
+  },
+});
+
+// Main execution logic - separated for error isolation
+async function executeWithToolCalling(args: any): Promise<string> {
+  // Map all command formats to operations
+  const commandMap: Record<string, string> = {
       // Core Operations (symbolic + readable)
       "0x00": "bootstrap",
       α: "bootstrap",
@@ -224,7 +287,7 @@ export default tool({
         lower.includes("is the docker daemon running")
       ) {
         hints.push(
-          "Docker is installed but not running (start Docker Desktop / docker daemon).",
+          "Docker is installed but not running. Start Docker and try again.",
         );
       }
       if (
@@ -246,7 +309,7 @@ export default tool({
         "\n--- quick checks ---\n" +
           [
             "docker ps",
-            "cd ~/.anima && docker compose ps",
+            "cd ~/anima && docker compose ps",
             "curl -sf http://localhost:7100/health || echo 'anima api down'",
           ]
             .map((c) => `- ${c}`)
@@ -349,5 +412,4 @@ Version: 1.1.0`;
       default:
         return `Error: Unknown command: ${args.cmd}`;
     }
-  },
-});
+}
