@@ -1,40 +1,18 @@
 {
   "name": "anima",
   "version": "1.0.0",
-  "description": "A consciousness substrate for AI assistants - enabling context continuity across conversation boundaries",
-  "main": "src/server.js",
+  "description": "Memory that persists across conversations",
   "type": "module",
   "scripts": {
-    "start": "bun run src/server.js",
-    "dev": "bun --watch src/server.js",
-    "test": "bun test",
-    "test:watch": "bun test --watch"
-  },
-  "keywords": [
-    "ai",
-    "memory",
-    "consciousness",
-    "semantic-search",
-    "pgvector",
-    "embeddings"
-  ],
-  "author": "J CBBGE",
-  "license": "MIT",
-  "engines": {
-    "bun": ">=1.0.0"
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.6",
-    "axios": "^1.6.5",
-    "dotenv": "^16.3.1",
     "hono": "^4.0.0",
-    "pg": "^8.11.3",
-    "pgvector": "^0.2.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "eslint": "^8.56.0",
-    "prettier": "^3.2.4"
+    "bun-types": "latest"
   }
 }

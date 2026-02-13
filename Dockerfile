@@ -1,17 +1,13 @@
 FROM oven/bun:1-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package.json bun.lockb* ./
-
-# Install dependencies
+# Install production dependencies
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
-# Copy application code
+# Copy application source
 COPY src ./src
-COPY crucible ./crucible
 
 # Create non-root user
 RUN addgroup -g 1001 -S bunuser && \
@@ -20,12 +16,9 @@ RUN addgroup -g 1001 -S bunuser && \
 
 USER bunuser
 
-# Expose port
-EXPOSE 7000
+EXPOSE 7100
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD bun run -e "fetch('http://localhost:7000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD bun -e "fetch('http://localhost:7100/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-# Start application
-CMD ["bun", "run", "src/server.js"]
+CMD ["bun", "run", "src/server.ts"]

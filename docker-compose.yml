@@ -21,31 +21,19 @@ services:
     restart: unless-stopped
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: anima-api
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: 7100
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: anima
-      POSTGRES_USER: anima
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-anima_dev_password}
-      CORE_EMBEDDING_PROVIDER: ${CORE_EMBEDDING_PROVIDER:-ollama}
-      CORE_ENCODER_URL: http://ollama:11434
-      SECONDARY_ENCODER_KEY: ${SECONDARY_ENCODER_KEY:-}
-    volumes:
-      - ./src:/app/src
-      - ./package.json:/app/package.json
+      DATABASE_URL: postgres://anima:${POSTGRES_PASSWORD:-anima_dev_password}@postgres:5432/anima
+      ENCODER_URL: http://ollama:11434
+      ENCODER_MODEL: nomic-embed-text
     ports:
       - "7100:7100"
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
-        condition: service_started
+        condition: service_healthy
     networks:
       - anima-network
     restart: unless-stopped
@@ -57,6 +45,11 @@ services:
       - ollama_data:/root/.ollama
     ports:
       - "7102:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - anima-network
     restart: unless-stopped
