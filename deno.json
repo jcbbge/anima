@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "surrealdb": "npm:surrealdb@2.0.0-beta.2"
+  },
+  "tasks": {
+    "mcp": "deno run --allow-net --allow-env --allow-read mcp-server/index.ts",
+    "cli": "deno run --allow-net --allow-env --allow-read cli/anima.ts",
+    "schema": "surreal import --endpoint http://127.0.0.1:8000 --username root --password root --namespace anima --database memory schema/anima.surql"
+  }
+}
