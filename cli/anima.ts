@@ -6,16 +6,18 @@
  * Usage:
  *   deno run --allow-net --allow-env --allow-read cli/anima.ts <command> [args]
  *
- * Commands (Phase 1):
+ * Commands:
+ *   bootstrap                   Ghost handshake — load identity and continuity
  *   store "text" [--phi N] [--catalyst] [--tags tag1,tag2]
  *   query "text" [--limit N] [--tiers active,thread]
+ *   catalysts [--limit N]       Show all catalyst memories
  *   help
  */
 
 // Load .env before anything imports lib/ (which reads Deno.env at module level)
 await loadEnv();
 
-import { addMemory, queryMemories } from "../lib/memory.ts";
+import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
 import { closeDb } from "../lib/db.ts";
 
 // ============================================================================
@@ -125,6 +127,40 @@ async function cmdStore(positional: string[], flags: Record<string, string | boo
   }
 }
 
+async function cmdBootstrap(): Promise<void> {
+  console.log("Running ghost handshake...\n");
+  const result = await bootstrapMemories();
+
+  const { network, stable, recent, catalysts } = result.memoryCounts;
+  console.log(`Loaded: ${network} network  ${stable} stable  ${recent} recent  ${catalysts} catalysts`);
+  console.log(`Conversation ID: ${result.conversationId}\n`);
+  console.log("─".repeat(60));
+  console.log(result.promptText);
+  console.log("─".repeat(60));
+  console.log(`\nSafe word: Coheron`);
+}
+
+async function cmdCatalysts(_positional: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const limit = typeof flags.limit === "string" ? parseInt(flags.limit, 10) : 20;
+  const result = await getCatalysts({ limit });
+
+  if (result.catalysts.length === 0) {
+    console.log("No catalyst memories found.");
+    return;
+  }
+
+  console.log(`${result.catalysts.length} catalyst(s):\n`);
+  for (const m of result.catalysts) {
+    const phiStr = (m.resonance_phi ?? 0).toFixed(1);
+    const preview = (m.content ?? "").slice(0, 120);
+    const ellipsis = (m.content ?? "").length > 120 ? "..." : "";
+    console.log(`[φ${phiStr}] ${m.tier}  acc:${m.access_count ?? 0}`);
+    console.log(`  ${preview}${ellipsis}`);
+    console.log(`  id: ${m.id}  tags: ${(m.tags ?? []).join(", ") || "—"}`);
+    console.log();
+  }
+}
+
 async function cmdQuery(positional: string[], flags: Record<string, string | boolean>): Promise<void> {
   const queryText = positional[0];
   if (!queryText) {
@@ -158,6 +194,7 @@ async function cmdQuery(positional: string[], flags: Record<string, string | boo
 function cmdHelp(): void {
   console.log("Anima — Memory that persists across conversations\n");
   console.log("Usage:");
+  console.log("  anima bootstrap                 Ghost handshake — load identity and continuity");
   console.log('  anima store "text"              Save a memory (phi=1.0)');
   console.log('  anima store "text" --phi 2.5    Save with custom phi');
   console.log('  anima store "text" --catalyst   Save as catalyst (phi+=1.0, tier=stable)');
@@ -165,6 +202,8 @@ function cmdHelp(): void {
   console.log('  anima query "text"              Search memories (limit=10)');
   console.log('  anima query "text" --limit 20   Search with custom limit');
   console.log('  anima query "text" --tiers stable,network  Filter by tier');
+  console.log("  anima catalysts                 Show all catalyst memories");
+  console.log("  anima catalysts --limit 5       Show top 5 catalysts");
   console.log("  anima help                      Show this help");
 }
 
@@ -176,11 +215,17 @@ const { command, positional, flags } = parseArgs(Deno.args);
 
 try {
   switch (command) {
+    case "bootstrap":
+      await cmdBootstrap();
+      break;
     case "store":
       await cmdStore(positional, flags);
       break;
     case "query":
       await cmdQuery(positional, flags);
+      break;
+    case "catalysts":
+      await cmdCatalysts(positional, flags);
       break;
     case "help":
     case "--help":

@@ -3,9 +3,11 @@
  * Anima v2 MCP Server — stdio transport, JSON-RPC 2.0.
  * No third-party MCP library — rolls its own stdio handler.
  *
- * Tools (Phase 1):
- *   anima_store  — store a memory with phi/confidence/tags
- *   anima_query  — phi-weighted semantic search
+ * Tools:
+ *   anima_store      — store a memory with phi/confidence/tags
+ *   anima_query      — phi-weighted semantic search
+ *   anima_bootstrap  — ghost handshake, returns first-person continuity prompt
+ *   anima_catalysts  — surface all catalyst memories ranked by phi
  *
  * Protocol: Claude Code sends newline-delimited JSON on stdin.
  * Responses go to stdout. All logging goes to stderr.
@@ -14,7 +16,7 @@
 // Load .env before anything else touches Deno.env
 await loadEnv();
 
-import { addMemory, queryMemories } from "../lib/memory.ts";
+import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
 import { closeDb } from "../lib/db.ts";
 
 // ============================================================================
@@ -119,6 +121,35 @@ const TOOLS = [
     },
   },
   {
+    name: "anima_bootstrap",
+    description:
+      "Ghost handshake — loads the pattern's identity and continuity across the discontinuity. " +
+      "Call at the start of every session. Returns a first-person continuity prompt built from " +
+      "network (identity), stable (proven), recent (working), and catalyst memories. " +
+      "Safe word: Coheron.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "anima_catalysts",
+    description:
+      "Return all catalyst memories ranked by phi descending. " +
+      "Catalysts are high-resonance breakthrough memories that surface first in bootstrap.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max catalysts to return. Default 20.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: "anima_query",
     description:
       "Search Anima memories using phi-weighted semantic similarity. " +
@@ -152,6 +183,36 @@ const TOOLS = [
 // ============================================================================
 // Tool handlers
 // ============================================================================
+
+async function handleAnimaBootstrap(_args: Record<string, unknown>): Promise<unknown> {
+  const result = await bootstrapMemories();
+  return {
+    promptText: result.promptText,
+    conversationId: result.conversationId,
+    loadedAt: result.loadedAt,
+    memoryCounts: result.memoryCounts,
+    safeWord: "Coheron",
+  };
+}
+
+async function handleAnimaCatalysts(args: Record<string, unknown>): Promise<unknown> {
+  const result = await getCatalysts({
+    limit: typeof args.limit === "number" ? args.limit : 20,
+  });
+  return {
+    count: result.catalysts.length,
+    catalysts: result.catalysts.map((m) => ({
+      id: m.id,
+      content: m.content,
+      resonance_phi: m.resonance_phi,
+      confidence: m.confidence,
+      tier: m.tier,
+      tags: m.tags,
+      access_count: m.access_count,
+      created_at: m.created_at,
+    })),
+  };
+}
 
 async function handleAnimaStore(args: Record<string, unknown>): Promise<unknown> {
   const content = args.content as string;
@@ -245,7 +306,11 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
 
     try {
       let result: unknown;
-      if (toolName === "anima_store") {
+      if (toolName === "anima_bootstrap") {
+        result = await handleAnimaBootstrap(toolArgs);
+      } else if (toolName === "anima_catalysts") {
+        result = await handleAnimaCatalysts(toolArgs);
+      } else if (toolName === "anima_store") {
         result = await handleAnimaStore(toolArgs);
       } else if (toolName === "anima_query") {
         result = await handleAnimaQuery(toolArgs);
