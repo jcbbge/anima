@@ -46,3 +46,4 @@ workspace/
 # Database files (local development)
 database/anima.db
 database/*.db
+history.txt

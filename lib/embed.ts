@@ -1,13 +1,14 @@
 /**
  * embed.ts
  * Ollama embedding client for Anima v2.
- * Returns 768-dim nomic-embed-text vectors or null on failure.
+ * Returns embedding vectors or null on failure.
  * Fails silently — a missing embedding is recoverable; a crashed process is not.
  */
 
 // Read lazily at call time so .env loaded by entry point is visible
 function ollamaUrl()   { return Deno.env.get("OLLAMA_URL")   ?? "http://localhost:11434"; }
 function ollamaModel() { return Deno.env.get("OLLAMA_MODEL") ?? "nomic-embed-text"; }
+function embeddingDim() { return parseInt(Deno.env.get("EMBEDDING_DIM") ?? "768", 10); }
 
 export async function generateEmbedding(text: string): Promise<number[] | null> {
   try {
@@ -24,9 +25,10 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
     }
 
     const { embedding } = await res.json();
+    const expectedDim = embeddingDim();
 
-    if (!Array.isArray(embedding) || embedding.length !== 768) {
-      console.error(`[anima:embed] Unexpected embedding shape: ${embedding?.length}`);
+    if (!Array.isArray(embedding) || embedding.length !== expectedDim) {
+      console.error(`[anima:embed] Unexpected embedding shape: got ${embedding?.length}, expected ${expectedDim}`);
       return null;
     }
 
