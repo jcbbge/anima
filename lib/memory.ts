@@ -47,6 +47,7 @@ export interface AddMemoryParams {
   resonance_phi?: number;
   confidence?: number;
   is_catalyst?: boolean;
+  tier?: "active" | "thread" | "stable" | "network";
   conversation_id?: string;
 }
 
@@ -105,6 +106,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     resonance_phi = 1.0,
     confidence = 0.6,
     is_catalyst = false,
+    tier = "active",
     conversation_id,
   } = params;
 
@@ -134,7 +136,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       embedding = $embedding,
       resonance_phi = $resonance_phi,
       confidence = $confidence,
-      tier = 'active',
+      tier = $tier,
       tier_updated = time::now(),
       is_catalyst = $is_catalyst,
       access_count = 0,
@@ -152,6 +154,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       embedding: embedding ?? undefined,
       resonance_phi,
       confidence,
+      tier,
       is_catalyst,
       category: category ?? undefined,
       tags,
