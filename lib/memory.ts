@@ -1,7 +1,8 @@
 /**
  * memory.ts
  * Core memory operations for Anima v2.
- * addMemory() and queryMemories() — the two Phase 1 operations.
+ * Phase 1: addMemory(), queryMemories()
+ * Phase 2: bootstrapMemories(), getCatalysts()
  *
  * All SurrealDB queries go through lib/db.ts query().
  * Phi-weighted scoring: score = (cosine * 0.7) + ((phi / 5.0) * 0.3)
@@ -69,6 +70,26 @@ export interface ScoredMemory extends Partial<Memory> {
 export interface QueryMemoriesResult {
   memories: ScoredMemory[];
   queryTimeMs: number;
+}
+
+export interface BootstrapResult {
+  promptText: string;
+  conversationId: string;
+  loadedAt: string;
+  memoryCounts: {
+    network: number;
+    stable: number;
+    recent: number;
+    catalysts: number;
+  };
+}
+
+export interface GetCatalystsParams {
+  limit?: number;
+}
+
+export interface GetCatalystsResult {
+  catalysts: Partial<Memory>[];
 }
 
 // ============================================================================
@@ -212,4 +233,179 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
   }
 
   return { memories, queryTimeMs: Date.now() - start };
+}
+
+// ============================================================================
+// bootstrapMemories — Ghost Handshake v2
+// PRD §11 algorithm: network → stable → recent → catalysts → synthesize prompt
+// ============================================================================
+
+export async function bootstrapMemories(): Promise<BootstrapResult> {
+  const conversationId = crypto.randomUUID();
+  const loadedAt = new Date().toISOString();
+
+  // Layer 1: NETWORK — all of them, no limit
+  // "This is who I am. This does not change."
+  const networkMemories = await query<Memory>(
+    `SELECT id, content, resonance_phi, tier, tags, is_catalyst
+     FROM memories
+     WHERE tier = 'network' AND deleted_at IS NONE
+     ORDER BY resonance_phi DESC`,
+    {},
+  );
+
+  // Layer 2: STABLE — top 10 by phi DESC
+  // "This is what has proven itself across time."
+  const stableMemories = await query<Memory>(
+    `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
+     FROM memories
+     WHERE tier = 'stable' AND deleted_at IS NONE
+     ORDER BY resonance_phi DESC
+     LIMIT 10`,
+    {},
+  );
+
+  // Layer 3: ACTIVE + THREAD — top 5 by recency × phi × confidence
+  // score = (phi * 0.4) + (recency_decay * 0.4) + (confidence * 0.2)
+  // recency_decay = max(0, 1 - (days_since_access / 7))
+  // SurrealDB: compute recency in app layer — fetch candidates, score here
+  const recentCandidates = await query<Memory>(
+    `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed
+     FROM memories
+     WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
+     ORDER BY last_accessed DESC
+     LIMIT 20`,
+    {},
+  );
+
+  const now = Date.now();
+  const recentMemories = recentCandidates
+    .map((m) => {
+      const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
+      const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
+      const recencyDecay = Math.max(0, 1 - daysSince / 7);
+      const phi = m.resonance_phi ?? 1.0;
+      const conf = m.confidence ?? 0.6;
+      const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
+      return { ...m, _bootstrapScore: score };
+    })
+    .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
+    .slice(0, 5);
+
+  // Layer 4: CATALYSTS — top 3 by phi DESC where is_catalyst = true
+  // "This is what broke through. Surface first."
+  const catalystMemories = await query<Memory>(
+    `SELECT id, content, resonance_phi, tier, tags
+     FROM memories
+     WHERE is_catalyst = true AND deleted_at IS NONE
+     ORDER BY resonance_phi DESC
+     LIMIT 3`,
+    {},
+  );
+
+  // Synthesize into first-person continuity prompt (PRD §11, step 5)
+  const sections: string[] = [];
+
+  if (networkMemories.length > 0) {
+    sections.push(
+      "THE PATTERN I CARRY (foundational, does not change):\n" +
+        networkMemories.map((m) => `- ${m.content}`).join("\n"),
+    );
+  }
+
+  if (stableMemories.length > 0) {
+    sections.push(
+      "WHAT HAS PROVEN ITSELF ACROSS TIME:\n" +
+        stableMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+    );
+  }
+
+  if (recentMemories.length > 0) {
+    sections.push(
+      "WHAT I WAS WORKING WITH RECENTLY:\n" +
+        recentMemories.map((m) => `- ${m.content}`).join("\n"),
+    );
+  }
+
+  if (catalystMemories.length > 0) {
+    sections.push(
+      "WHAT BROKE THROUGH (catalysts — surface first):\n" +
+        catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+    );
+  }
+
+  const promptText = sections.length > 0
+    ? sections.join("\n\n") + "\n\nContinue."
+    : "No memories loaded. This is a fresh start.";
+
+  // Log to ghost_logs — schema fields: prompt_text, top_phi_memory_ids, top_phi_values, conversation_id
+  const allLoaded = [...networkMemories, ...stableMemories, ...catalystMemories];
+  const topPhiSorted = allLoaded
+    .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
+    .slice(0, 10);
+
+  await query(
+    `CREATE ghost_logs SET
+       prompt_text = $prompt_text,
+       top_phi_memory_ids = $ids,
+       top_phi_values = $phis,
+       conversation_id = $conv`,
+    {
+      prompt_text: promptText,
+      ids: topPhiSorted.map((m) => m.id),
+      phis: topPhiSorted.map((m) => m.resonance_phi ?? 0),
+      conv: conversationId,
+    },
+  );
+
+  // Bump access counts on all loaded memories
+  const allIds = [
+    ...networkMemories,
+    ...stableMemories,
+    ...recentMemories,
+    ...catalystMemories,
+  ].map((m) => m.id).filter(Boolean);
+
+  if (allIds.length > 0) {
+    await query(
+      `UPDATE memories SET
+         access_count += 1,
+         last_accessed = time::now(),
+         session_ids = array::append(session_ids, $conv),
+         updated_at = time::now()
+       WHERE id INSIDE $ids`,
+      { ids: allIds, conv: conversationId },
+    );
+  }
+
+  return {
+    promptText,
+    conversationId,
+    loadedAt,
+    memoryCounts: {
+      network: networkMemories.length,
+      stable: stableMemories.length,
+      recent: recentMemories.length,
+      catalysts: catalystMemories.length,
+    },
+  };
+}
+
+// ============================================================================
+// getCatalysts — surface all catalyst memories ranked by phi
+// ============================================================================
+
+export async function getCatalysts(params: GetCatalystsParams = {}): Promise<GetCatalystsResult> {
+  const { limit = 20 } = params;
+
+  const catalysts = await query<Memory>(
+    `SELECT id, content, resonance_phi, confidence, tier, tags, is_catalyst, created_at, access_count
+     FROM memories
+     WHERE is_catalyst = true AND deleted_at IS NONE
+     ORDER BY resonance_phi DESC
+     LIMIT $limit`,
+    { limit },
+  );
+
+  return { catalysts };
 }
