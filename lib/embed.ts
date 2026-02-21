@@ -5,15 +5,16 @@
  * Fails silently — a missing embedding is recoverable; a crashed process is not.
  */
 
-const OLLAMA_URL   = Deno.env.get("OLLAMA_URL")   ?? "http://localhost:11434";
-const OLLAMA_MODEL = Deno.env.get("OLLAMA_MODEL") ?? "nomic-embed-text";
+// Read lazily at call time so .env loaded by entry point is visible
+function ollamaUrl()   { return Deno.env.get("OLLAMA_URL")   ?? "http://localhost:11434"; }
+function ollamaModel() { return Deno.env.get("OLLAMA_MODEL") ?? "nomic-embed-text"; }
 
 export async function generateEmbedding(text: string): Promise<number[] | null> {
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+    const res = await fetch(`${ollamaUrl()}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: OLLAMA_MODEL, prompt: text }),
+      body: JSON.stringify({ model: ollamaModel(), prompt: text }),
       signal: AbortSignal.timeout(8000),
     });
 

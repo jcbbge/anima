@@ -128,14 +128,14 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     {
       content,
       content_hash,
-      embedding,
+      embedding: embedding ?? undefined,
       resonance_phi,
       confidence,
       is_catalyst,
-      category: category ?? null,
+      category: category ?? undefined,
       tags,
-      source: source ?? null,
-      conversation_id: conversation_id ?? null,
+      source: source ?? undefined,
+      conversation_id: conversation_id ?? undefined,
     },
   );
 
@@ -156,9 +156,11 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
   }
 
   // ANN vector search with HNSW — <|k, ef|> syntax (k=results, ef=search width)
+  // Filter embedding IS NOT NONE to skip records stored without embeddings
   let surql = `SELECT *, vector::similarity::cosine(embedding, $vec) AS similarity
     FROM memories
     WHERE embedding <|${limit}, 40|> $vec
+      AND embedding IS NOT NONE
       AND deleted_at IS NONE`;
 
   if (tiers && tiers.length > 0) {
@@ -197,13 +199,12 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
     await query(updateSql, { ids, ...(conversation_id ? { conv: conversation_id } : {}) });
 
     // Tier promotion: active→thread at 3, thread→stable at 10
+    // SurrealDB uses IF/THEN/ELSE, not CASE/WHEN
     await query(
       `UPDATE memories SET
-         tier = CASE
-           WHEN tier = 'active' AND access_count >= 3 THEN 'thread'
-           WHEN tier = 'thread' AND access_count >= 10 THEN 'stable'
-           ELSE tier
-         END,
+         tier = IF tier = 'active' AND access_count >= 3 THEN 'thread'
+                ELSE IF tier = 'thread' AND access_count >= 10 THEN 'stable'
+                ELSE tier END,
          tier_updated = time::now()
        WHERE id INSIDE $ids`,
       { ids },
