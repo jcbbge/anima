@@ -17,6 +17,7 @@
 await loadEnv();
 
 import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
+import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { closeDb } from "../lib/db.ts";
 
 // ============================================================================
@@ -150,6 +151,24 @@ const TOOLS = [
     },
   },
   {
+    name: "anima_reflect",
+    description:
+      "Intentional session-end fold. Synthesizes the most significant active and thread memories " +
+      "into a single insight using the Fold Engine. Call at the end of a meaningful session. " +
+      "The synthesis is stored as a thread-tier memory with a fold_log record. " +
+      "This is Recognition or Analysis mode depending on what has accumulated.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation_id: {
+          type: "string",
+          description: "Optional conversation ID to scope the reflection to this session.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: "anima_query",
     description:
       "Search Anima memories using phi-weighted semantic similarity. " +
@@ -230,6 +249,18 @@ async function handleAnimaStore(args: Record<string, unknown>): Promise<unknown>
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   });
 
+  // Fire synthesis check as background task — non-blocking.
+  // MCP server stays alive so the async work completes before the next request.
+  if (!result.isDuplicate) {
+    Promise.resolve().then(() =>
+      checkAndSynthesize(
+        result.memory.id as string,
+        null, // embedding not passed back from addMemory — phi/cluster checks still run
+        typeof args.conversation_id === "string" ? args.conversation_id : undefined,
+      ).catch((err) => console.error(`[anima:fold] Background check failed: ${(err as Error).message}`))
+    );
+  }
+
   return {
     id: result.memory.id,
     isDuplicate: result.isDuplicate,
@@ -239,6 +270,13 @@ async function handleAnimaStore(args: Record<string, unknown>): Promise<unknown>
       ? "Memory already exists — access_count incremented."
       : "Memory stored successfully.",
   };
+}
+
+async function handleAnimaReflect(args: Record<string, unknown>): Promise<unknown> {
+  const result = await reflectAndSynthesize(
+    typeof args.conversation_id === "string" ? args.conversation_id : undefined,
+  );
+  return result;
 }
 
 async function handleAnimaQuery(args: Record<string, unknown>): Promise<unknown> {
@@ -310,6 +348,8 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
         result = await handleAnimaBootstrap(toolArgs);
       } else if (toolName === "anima_catalysts") {
         result = await handleAnimaCatalysts(toolArgs);
+      } else if (toolName === "anima_reflect") {
+        result = await handleAnimaReflect(toolArgs);
       } else if (toolName === "anima_store") {
         result = await handleAnimaStore(toolArgs);
       } else if (toolName === "anima_query") {

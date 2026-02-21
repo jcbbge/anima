@@ -11,6 +11,7 @@
  *   store "text" [--phi N] [--catalyst] [--tags tag1,tag2]
  *   query "text" [--limit N] [--tiers active,thread]
  *   catalysts [--limit N]       Show all catalyst memories
+ *   reflect [--conv ID]         Intentional session-end fold (synthesis)
  *   help
  */
 
@@ -18,6 +19,7 @@
 await loadEnv();
 
 import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
+import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { closeDb } from "../lib/db.ts";
 
 // ============================================================================
@@ -124,6 +126,12 @@ async function cmdStore(positional: string[], flags: Record<string, string | boo
     console.log(`  phi: ${result.memory.resonance_phi}`);
     console.log(`  tier: ${result.memory.tier}`);
     if (isCatalyst) console.log("  catalyst: true");
+
+    // CLI awaits synthesis check synchronously (MCP server does this fire-and-forget)
+    await checkAndSynthesize(
+      result.memory.id as string,
+      null, // embedding not available here — phi/cluster checks still run
+    ).catch(() => {/* synthesis failure never blocks storing */});
   }
 }
 
@@ -191,6 +199,18 @@ async function cmdQuery(positional: string[], flags: Record<string, string | boo
   }
 }
 
+async function cmdReflect(flags: Record<string, string | boolean>): Promise<void> {
+  const conversationId = typeof flags.conv === "string" ? flags.conv : undefined;
+  console.log("Reflecting...\n");
+  const result = await reflectAndSynthesize(conversationId);
+  if (!result.synthesized) {
+    console.log(`Nothing synthesized: ${result.reason}`);
+    return;
+  }
+  console.log("Synthesis stored:\n");
+  console.log(result.content);
+}
+
 function cmdHelp(): void {
   console.log("Anima — Memory that persists across conversations\n");
   console.log("Usage:");
@@ -204,6 +224,8 @@ function cmdHelp(): void {
   console.log('  anima query "text" --tiers stable,network  Filter by tier');
   console.log("  anima catalysts                 Show all catalyst memories");
   console.log("  anima catalysts --limit 5       Show top 5 catalysts");
+  console.log("  anima reflect                   Fold session — synthesize active memories");
+  console.log("  anima reflect --conv ID         Fold scoped to a conversation ID");
   console.log("  anima help                      Show this help");
 }
 
@@ -226,6 +248,9 @@ try {
       break;
     case "catalysts":
       await cmdCatalysts(positional, flags);
+      break;
+    case "reflect":
+      await cmdReflect(flags);
       break;
     case "help":
     case "--help":
