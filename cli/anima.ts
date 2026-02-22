@@ -12,13 +12,14 @@
  *   query "text" [--limit N] [--tiers active,thread]
  *   catalysts [--limit N]       Show all catalyst memories
  *   reflect [--conv ID]         Intentional session-end fold (synthesis)
+ *   stats                       System state — counts, phi, fold history
  *   help
  */
 
 // Load .env before anything imports lib/ (which reads Deno.env at module level)
 await loadEnv();
 
-import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
+import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { closeDb } from "../lib/db.ts";
 
@@ -211,6 +212,26 @@ async function cmdReflect(flags: Record<string, string | boolean>): Promise<void
   console.log(result.content);
 }
 
+async function cmdStats(): Promise<void> {
+  const s = await getStats();
+  console.log("Anima — System State\n");
+  console.log(`Total memories:  ${s.totalMemories}`);
+  console.log(`Catalysts:       ${s.catalystCount}`);
+  console.log(`Folds run:       ${s.foldCount}`);
+  console.log(`Last fold:       ${s.lastFoldAt ?? "never"}`);
+  console.log(`Worker:          ${s.workerListening ? "listening" : "stopped"}`);
+  console.log();
+  console.log("By tier:");
+  for (const [tier, count] of Object.entries(s.byTier).sort()) {
+    console.log(`  ${tier.padEnd(10)} ${count}`);
+  }
+  console.log();
+  console.log("φ distribution:");
+  console.log(`  total  ${s.phiTotal.toFixed(2)}`);
+  console.log(`  avg    ${s.phiAvg.toFixed(2)}`);
+  console.log(`  max    ${s.phiMax.toFixed(2)}`);
+}
+
 function cmdHelp(): void {
   console.log("Anima — Memory that persists across conversations\n");
   console.log("Usage:");
@@ -226,6 +247,7 @@ function cmdHelp(): void {
   console.log("  anima catalysts --limit 5       Show top 5 catalysts");
   console.log("  anima reflect                   Fold session — synthesize active memories");
   console.log("  anima reflect --conv ID         Fold scoped to a conversation ID");
+  console.log("  anima stats                     System state — counts, phi, fold history");
   console.log("  anima help                      Show this help");
 }
 
@@ -251,6 +273,9 @@ try {
       break;
     case "reflect":
       await cmdReflect(flags);
+      break;
+    case "stats":
+      await cmdStats();
       break;
     case "help":
     case "--help":

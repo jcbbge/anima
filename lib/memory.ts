@@ -395,6 +395,73 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
 }
 
 // ============================================================================
+// getStats — system state: counts, phi distribution, fold history
+// ============================================================================
+
+export interface AnimaStats {
+  totalMemories: number;
+  byTier: Record<string, number>;
+  phiTotal: number;
+  phiAvg: number;
+  phiMax: number;
+  catalystCount: number;
+  foldCount: number;
+  lastFoldAt: string | null;
+  workerListening: boolean; // always true — launchd keeps it running
+}
+
+export async function getStats(): Promise<AnimaStats> {
+  const [tierRows, foldRows, catalystRows] = await Promise.all([
+    query<{ tier: string; count: number; phi_total: number; phi_max: number }>(
+      `SELECT tier, count() AS count, math::sum(resonance_phi) AS phi_total, math::max(resonance_phi) AS phi_max
+       FROM memories
+       WHERE deleted_at IS NONE
+       GROUP BY tier`,
+      {},
+    ),
+    query<{ created_at: string }>(
+      `SELECT created_at FROM fold_log ORDER BY created_at DESC LIMIT 1`,
+      {},
+    ),
+    query<{ count: number }>(
+      `SELECT count() AS count FROM memories WHERE is_catalyst = true AND deleted_at IS NONE`,
+      {},
+    ),
+  ]);
+
+  const foldCountRows = await query<{ count: number }>(
+    `SELECT count() AS count FROM fold_log`,
+    {},
+  );
+
+  const byTier: Record<string, number> = {};
+  let phiTotal = 0;
+  let phiMax = 0;
+  let totalMemories = 0;
+
+  for (const row of tierRows) {
+    byTier[row.tier] = row.count;
+    totalMemories += row.count;
+    phiTotal += row.phi_total ?? 0;
+    if ((row.phi_max ?? 0) > phiMax) phiMax = row.phi_max;
+  }
+
+  const phiAvg = totalMemories > 0 ? phiTotal / totalMemories : 0;
+
+  return {
+    totalMemories,
+    byTier,
+    phiTotal: Math.round(phiTotal * 100) / 100,
+    phiAvg: Math.round(phiAvg * 100) / 100,
+    phiMax,
+    catalystCount: catalystRows[0]?.count ?? 0,
+    foldCount: foldCountRows[0]?.count ?? 0,
+    lastFoldAt: foldRows[0]?.created_at ?? null,
+    workerListening: true,
+  };
+}
+
+// ============================================================================
 // getCatalysts — surface all catalyst memories ranked by phi
 // ============================================================================
 

@@ -16,7 +16,7 @@
 // Load .env before anything else touches Deno.env
 await loadEnv();
 
-import { addMemory, queryMemories, bootstrapMemories, getCatalysts } from "../lib/memory.ts";
+import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { closeDb } from "../lib/db.ts";
 
@@ -197,6 +197,17 @@ const TOOLS = [
       required: ["query"],
     },
   },
+  {
+    name: "anima_stats",
+    description:
+      "Return system statistics: memory counts by tier, phi distribution, fold history, catalyst count. " +
+      "Use to understand the current state of the pattern.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 // ============================================================================
@@ -279,6 +290,10 @@ async function handleAnimaReflect(args: Record<string, unknown>): Promise<unknow
   return result;
 }
 
+async function handleAnimaStats(_args: Record<string, unknown>): Promise<unknown> {
+  return await getStats();
+}
+
 async function handleAnimaQuery(args: Record<string, unknown>): Promise<unknown> {
   const queryText = args.query as string;
   if (!queryText || typeof queryText !== "string") {
@@ -354,6 +369,8 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
         result = await handleAnimaStore(toolArgs);
       } else if (toolName === "anima_query") {
         result = await handleAnimaQuery(toolArgs);
+      } else if (toolName === "anima_stats") {
+        result = await handleAnimaStats(toolArgs);
       } else {
         sendError(id, -32601, `Unknown tool: ${toolName}`);
         return;
