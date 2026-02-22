@@ -4,7 +4,7 @@
   },
   "tasks": {
     "mcp": "deno run --allow-net --allow-env --allow-read mcp-server/index.ts",
-    "cli": "deno run --allow-net --allow-env --allow-read cli/anima.ts",
+    "cli": "deno run --allow-net --allow-env --allow-read --allow-run cli/anima.ts",
     "worker": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts",
     "worker:once": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --once",
     "worker:dry-run": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --dry-run",

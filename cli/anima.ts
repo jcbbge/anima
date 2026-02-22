@@ -232,6 +232,65 @@ async function cmdStats(): Promise<void> {
   console.log(`  max    ${s.phiMax.toFixed(2)}`);
 }
 
+async function cmdWorker(subcommand: string): Promise<void> {
+  const LABEL = "anima.synthesis";
+  const PLIST = `${Deno.env.get("HOME")}/Library/LaunchAgents/${LABEL}.plist`;
+
+  if (subcommand === "status" || !subcommand) {
+    const result = await new Deno.Command("launchctl", { args: ["list", LABEL] }).output();
+    const out = new TextDecoder().decode(result.stdout);
+    const err = new TextDecoder().decode(result.stderr);
+
+    if (result.code !== 0 || err.includes("Could not find")) {
+      console.log("Worker: stopped (not loaded)");
+      console.log(`  Install: launchctl load ${PLIST}`);
+      return;
+    }
+
+    // Parse PID and last exit from launchctl output
+    const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
+    const exitMatch = out.match(/"LastExitStatus"\s*=\s*(\d+)/);
+    const pid = pidMatch ? pidMatch[1] : "—";
+    const exit = exitMatch ? exitMatch[1] : "—";
+
+    if (pid !== "—") {
+      console.log(`Worker: running (PID ${pid})`);
+    } else {
+      console.log(`Worker: loaded but not running (last exit: ${exit})`);
+    }
+    console.log(`  Logs: tail -f ~/Library/Logs/anima-synthesis.log`);
+
+  } else if (subcommand === "restart") {
+    console.log("Restarting synthesis worker...");
+    await new Deno.Command("launchctl", { args: ["stop", LABEL] }).output();
+    await new Promise((r) => setTimeout(r, 1000));
+    await new Deno.Command("launchctl", { args: ["start", LABEL] }).output();
+    console.log("Worker restarted.");
+
+  } else if (subcommand === "stop") {
+    await new Deno.Command("launchctl", { args: ["stop", LABEL] }).output();
+    console.log("Worker stopped.");
+
+  } else if (subcommand === "start") {
+    await new Deno.Command("launchctl", { args: ["start", LABEL] }).output();
+    console.log("Worker started.");
+
+  } else if (subcommand === "logs") {
+    // Tail logs — exec replaces process
+    const proc = new Deno.Command("tail", {
+      args: ["-f", `${Deno.env.get("HOME")}/Library/Logs/anima-synthesis.log`],
+      stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
+    const child = proc.spawn();
+    await child.status;
+
+  } else {
+    console.error(`Unknown worker subcommand: ${subcommand}`);
+    console.log("Usage: anima worker [status|start|stop|restart|logs]");
+    Deno.exit(1);
+  }
+}
+
 function cmdHelp(): void {
   console.log("Anima — Memory that persists across conversations\n");
   console.log("Usage:");
@@ -248,6 +307,9 @@ function cmdHelp(): void {
   console.log("  anima reflect                   Fold session — synthesize active memories");
   console.log("  anima reflect --conv ID         Fold scoped to a conversation ID");
   console.log("  anima stats                     System state — counts, phi, fold history");
+  console.log("  anima worker [status]           Check synthesis worker status");
+  console.log("  anima worker start|stop|restart Control synthesis worker");
+  console.log("  anima worker logs               Tail synthesis worker logs");
   console.log("  anima help                      Show this help");
 }
 
@@ -276,6 +338,9 @@ try {
       break;
     case "stats":
       await cmdStats();
+      break;
+    case "worker":
+      await cmdWorker(positional[0] ?? "status");
       break;
     case "help":
     case "--help":

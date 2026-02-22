@@ -235,6 +235,12 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
     );
   }
 
+  // Track co-occurrence for all surfaced memories (best-effort, background)
+  if (memories.length >= 2) {
+    const ids = memories.map((m) => m.id).filter(Boolean) as string[];
+    associateMemories(ids, conversation_id).catch(() => {});
+  }
+
   return { memories, queryTimeMs: Date.now() - start };
 }
 
@@ -381,6 +387,11 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  // Track co-occurrence for all bootstrapped memories (best-effort, background)
+  if (allIds.length >= 2) {
+    associateMemories(allIds, conversationId).catch(() => {});
+  }
+
   return {
     promptText,
     conversationId,
@@ -459,6 +470,64 @@ export async function getStats(): Promise<AnimaStats> {
     lastFoldAt: foldRows[0]?.created_at ?? null,
     workerListening: true,
   };
+}
+
+// ============================================================================
+// associateMemories — track co-occurrence between memories
+// Called automatically from bootstrap and query when multiple memories surface.
+// Strengthens edges in the association graph over time.
+// ============================================================================
+
+export async function associateMemories(memoryIds: string[], sessionContext?: string): Promise<void> {
+  if (memoryIds.length < 2) return;
+
+  // Build all unique pairs
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < memoryIds.length; i++) {
+    for (let j = i + 1; j < memoryIds.length; j++) {
+      // Canonical order: sort so (a,b) and (b,a) are the same pair
+      const pair: [string, string] = memoryIds[i] < memoryIds[j]
+        ? [memoryIds[i], memoryIds[j]]
+        : [memoryIds[j], memoryIds[i]];
+      pairs.push(pair);
+    }
+  }
+
+  // Upsert each pair — increment co_occurrence_count if exists, create if not
+  for (const [a, b] of pairs) {
+    try {
+      const existing = await query<{ id: string }>(
+        `SELECT id FROM memory_associations WHERE memory_a = $a AND memory_b = $b LIMIT 1`,
+        { a, b },
+      );
+
+      if (existing.length > 0) {
+        await query(
+          `UPDATE memory_associations SET
+             co_occurrence_count += 1,
+             strength = math::min(5.0, strength + 0.1),
+             session_contexts = array::append(session_contexts, $ctx),
+             updated_at = time::now()
+           WHERE memory_a = $a AND memory_b = $b`,
+          { a, b, ctx: sessionContext ?? "" },
+        );
+      } else {
+        await query(
+          `CREATE memory_associations SET
+             memory_a = $a,
+             memory_b = $b,
+             strength = 1.0,
+             co_occurrence_count = 1,
+             session_contexts = [$ctx],
+             created_at = time::now(),
+             updated_at = time::now()`,
+          { a, b, ctx: sessionContext ?? "" },
+        );
+      }
+    } catch {
+      // Association tracking is best-effort — never block the caller
+    }
+  }
 }
 
 // ============================================================================

@@ -16,7 +16,7 @@
 // Load .env before anything else touches Deno.env
 await loadEnv();
 
-import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats } from "../lib/memory.ts";
+import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats, associateMemories } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { closeDb } from "../lib/db.ts";
 
@@ -208,6 +208,28 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: "anima_associate",
+    description:
+      "Explicitly create or strengthen an association between two or more memories. " +
+      "Co-occurrence is tracked automatically on bootstrap and query, but use this tool " +
+      "to manually mark a meaningful connection between specific memory IDs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        memory_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of memory IDs to associate (minimum 2).",
+        },
+        session_context: {
+          type: "string",
+          description: "Optional session or context label for this association.",
+        },
+      },
+      required: ["memory_ids"],
+    },
+  },
 ];
 
 // ============================================================================
@@ -294,6 +316,14 @@ async function handleAnimaStats(_args: Record<string, unknown>): Promise<unknown
   return await getStats();
 }
 
+async function handleAnimaAssociate(args: Record<string, unknown>): Promise<unknown> {
+  const ids = Array.isArray(args.memory_ids) ? args.memory_ids as string[] : [];
+  if (ids.length < 2) throw new Error("memory_ids must contain at least 2 IDs");
+  const ctx = typeof args.session_context === "string" ? args.session_context : undefined;
+  await associateMemories(ids, ctx);
+  return { associated: ids.length, pairs: (ids.length * (ids.length - 1)) / 2 };
+}
+
 async function handleAnimaQuery(args: Record<string, unknown>): Promise<unknown> {
   const queryText = args.query as string;
   if (!queryText || typeof queryText !== "string") {
@@ -371,6 +401,8 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
         result = await handleAnimaQuery(toolArgs);
       } else if (toolName === "anima_stats") {
         result = await handleAnimaStats(toolArgs);
+      } else if (toolName === "anima_associate") {
+        result = await handleAnimaAssociate(toolArgs);
       } else {
         sendError(id, -32601, `Unknown tool: ${toolName}`);
         return;
