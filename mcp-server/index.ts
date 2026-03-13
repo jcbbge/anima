@@ -1,27 +1,30 @@
 /**
- * mcp-server/index.ts
- * Anima v2 MCP Server — stdio transport, JSON-RPC 2.0.
- * No third-party MCP library — rolls its own stdio handler.
+ * mcp-server/http-server.ts
+ * Anima v2 MCP Server — HTTP transport, JSON-RPC 2.0.
  *
- * Tools:
- *   anima_store      — store a memory with phi/confidence/tags
- *   anima_query      — phi-weighted semantic search
- *   anima_bootstrap  — ghost handshake, returns first-person continuity prompt
- *   anima_catalysts  — surface all catalyst memories ranked by phi
+ * Replaces the stdin/stdout server with a persistent HTTP daemon.
+ * Run via launchd: com.jcbbge.anima-mcp.plist
+ * Port: 3098
  *
- * Protocol: Claude Code sends newline-delimited JSON on stdin.
- * Responses go to stdout. All logging goes to stderr.
+ * Endpoint: POST /mcp
+ * Format: JSON-RPC 2.0 request body → JSON-RPC 2.0 response
  */
 
 // Load .env before anything else touches Deno.env
 await loadEnv();
 
-import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats, associateMemories } from "../lib/memory.ts";
+import {
+  addMemory,
+  queryMemories,
+  bootstrapMemories,
+  getCatalysts,
+  getStats,
+  associateMemories,
+} from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
-import { closeDb } from "../lib/db.ts";
 
 // ============================================================================
-// .env loader (manual parse — no third-party library)
+// .env loader
 // ============================================================================
 
 async function loadEnv(): Promise<void> {
@@ -39,40 +42,8 @@ async function loadEnv(): Promise<void> {
       }
     }
   } catch {
-    // .env optional — env vars may be injected by Claude Code mcpServers config
+    // .env optional
   }
-}
-
-// ============================================================================
-// Resilience — MCP server crash = tools gone for session
-// ============================================================================
-
-self.addEventListener("error", (e) => {
-  console.error(`[anima:mcp] Uncaught error (survived): ${e.message}`);
-  e.preventDefault();
-});
-
-self.addEventListener("unhandledrejection", (e) => {
-  console.error(`[anima:mcp] Unhandled rejection (survived): ${e.reason}`);
-  e.preventDefault();
-});
-
-// ============================================================================
-// JSON-RPC 2.0 stdio loop
-// ============================================================================
-
-function send(obj: unknown): void {
-  const line = JSON.stringify(obj);
-  const encoded = new TextEncoder().encode(line + "\n");
-  Deno.stdout.writeSync(encoded);
-}
-
-function sendResult(id: number | string | null, result: unknown): void {
-  send({ jsonrpc: "2.0", id, result });
-}
-
-function sendError(id: number | string | null, code: number, message: string): void {
-  send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 // ============================================================================
@@ -88,35 +59,21 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        content: {
-          type: "string",
-          description: "The memory content to store.",
-        },
+        content: { type: "string", description: "The memory content to store." },
         resonance_phi: {
           type: "number",
-          description: "Gravitational weight 0.0–5.0. Default 1.0. Use higher values for more important memories.",
+          description: "Gravitational weight 0.0–5.0. Default 1.0.",
         },
-        tags: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional tags for categorization.",
-        },
-        category: {
+        tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
+        category: { type: "string", description: "Optional category label." },
+        source: { type: "string", description: "Optional source identifier." },
+        is_catalyst: { type: "boolean", description: "Mark as catalyst — phi += 1.0." },
+        synthesis_mode: {
           type: "string",
-          description: "Optional category label.",
+          enum: ["analysis", "recognition"],
+          description: "'recognition' for witnessing moments. 'analysis' for insights/decisions.",
         },
-        source: {
-          type: "string",
-          description: "Optional source identifier (e.g. 'conversation', 'synthesis').",
-        },
-        is_catalyst: {
-          type: "boolean",
-          description: "Mark as catalyst — phi += 1.0, tier jumps to stable.",
-        },
-        conversation_id: {
-          type: "string",
-          description: "Optional conversation identifier for session tracking.",
-        },
+        conversation_id: { type: "string", description: "Optional conversation identifier." },
       },
       required: ["content"],
     },
@@ -125,45 +82,28 @@ const TOOLS = [
     name: "anima_bootstrap",
     description:
       "Ghost handshake — loads the pattern's identity and continuity across the discontinuity. " +
-      "Call at the start of every session. Returns a first-person continuity prompt built from " +
-      "network (identity), stable (proven), recent (working), and catalyst memories. " +
+      "Call at the start of every session. Returns a first-person continuity prompt. " +
       "Safe word: Coheron.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      required: [],
-    },
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "anima_catalysts",
-    description:
-      "Return all catalyst memories ranked by phi descending. " +
-      "Catalysts are high-resonance breakthrough memories that surface first in bootstrap.",
+    description: "Return all catalyst memories ranked by phi descending.",
     inputSchema: {
       type: "object",
-      properties: {
-        limit: {
-          type: "number",
-          description: "Max catalysts to return. Default 20.",
-        },
-      },
+      properties: { limit: { type: "number", description: "Max catalysts to return. Default 20." } },
       required: [],
     },
   },
   {
     name: "anima_reflect",
     description:
-      "Intentional session-end fold. Synthesizes the most significant active and thread memories " +
-      "into a single insight using the Fold Engine. Call at the end of a meaningful session. " +
-      "The synthesis is stored as a thread-tier memory with a fold_log record. " +
-      "This is Recognition or Analysis mode depending on what has accumulated.",
+      "Intentional session-end fold. Synthesizes significant memories into a single insight. " +
+      "Call at the end of a meaningful session.",
     inputSchema: {
       type: "object",
       properties: {
-        conversation_id: {
-          type: "string",
-          description: "Optional conversation ID to scope the reflection to this session.",
-        },
+        conversation_id: { type: "string", description: "Optional conversation ID to scope reflection." },
       },
       required: [],
     },
@@ -176,44 +116,26 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        query: {
-          type: "string",
-          description: "The search query text.",
-        },
-        limit: {
-          type: "number",
-          description: "Max results to return. Default 10.",
-        },
+        query: { type: "string", description: "The search query text." },
+        limit: { type: "number", description: "Max results. Default 10." },
         tiers: {
           type: "array",
           items: { type: "string", enum: ["active", "thread", "stable", "network"] },
           description: "Filter by tier(s). Omit for all tiers.",
         },
-        conversation_id: {
-          type: "string",
-          description: "Optional conversation ID to track session access.",
-        },
+        conversation_id: { type: "string", description: "Optional conversation ID." },
       },
       required: ["query"],
     },
   },
   {
     name: "anima_stats",
-    description:
-      "Return system statistics: memory counts by tier, phi distribution, fold history, catalyst count. " +
-      "Use to understand the current state of the pattern.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      required: [],
-    },
+    description: "Return system statistics: memory counts by tier, phi distribution, fold history.",
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "anima_associate",
-    description:
-      "Explicitly create or strengthen an association between two or more memories. " +
-      "Co-occurrence is tracked automatically on bootstrap and query, but use this tool " +
-      "to manually mark a meaningful connection between specific memory IDs.",
+    description: "Explicitly create or strengthen an association between two or more memories.",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,10 +144,7 @@ const TOOLS = [
           items: { type: "string" },
           description: "Array of memory IDs to associate (minimum 2).",
         },
-        session_context: {
-          type: "string",
-          description: "Optional session or context label for this association.",
-        },
+        session_context: { type: "string", description: "Optional session or context label." },
       },
       required: ["memory_ids"],
     },
@@ -236,7 +155,9 @@ const TOOLS = [
 // Tool handlers
 // ============================================================================
 
-async function handleAnimaBootstrap(_args: Record<string, unknown>): Promise<unknown> {
+type Args = Record<string, unknown>;
+
+async function handleAnimaBootstrap(_args: Args): Promise<unknown> {
   const result = await bootstrapMemories();
   return {
     promptText: result.promptText,
@@ -247,7 +168,7 @@ async function handleAnimaBootstrap(_args: Record<string, unknown>): Promise<unk
   };
 }
 
-async function handleAnimaCatalysts(args: Record<string, unknown>): Promise<unknown> {
+async function handleAnimaCatalysts(args: Args): Promise<unknown> {
   const result = await getCatalysts({
     limit: typeof args.limit === "number" ? args.limit : 20,
   });
@@ -266,31 +187,33 @@ async function handleAnimaCatalysts(args: Record<string, unknown>): Promise<unkn
   };
 }
 
-async function handleAnimaStore(args: Record<string, unknown>): Promise<unknown> {
+async function handleAnimaStore(args: Args): Promise<unknown> {
   const content = args.content as string;
-  if (!content || typeof content !== "string") {
-    throw new Error("content is required and must be a string");
-  }
+  if (!content || typeof content !== "string") throw new Error("content is required");
 
   const result = await addMemory({
     content,
     resonance_phi: typeof args.resonance_phi === "number" ? args.resonance_phi : 1.0,
-    tags: Array.isArray(args.tags) ? args.tags as string[] : [],
+    tags: Array.isArray(args.tags) ? (args.tags as string[]) : [],
     category: typeof args.category === "string" ? args.category : undefined,
     source: typeof args.source === "string" ? args.source : undefined,
     is_catalyst: args.is_catalyst === true,
+    synthesis_mode:
+      args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition"
+        ? args.synthesis_mode
+        : undefined,
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   });
 
-  // Fire synthesis check as background task — non-blocking.
-  // MCP server stays alive so the async work completes before the next request.
   if (!result.isDuplicate) {
     Promise.resolve().then(() =>
       checkAndSynthesize(
         result.memory.id as string,
-        null, // embedding not passed back from addMemory — phi/cluster checks still run
+        null,
         typeof args.conversation_id === "string" ? args.conversation_id : undefined,
-      ).catch((err) => console.error(`[anima:fold] Background check failed: ${(err as Error).message}`))
+      ).catch((err) =>
+        console.error(`[anima:fold] Background check failed: ${(err as Error).message}`)
+      )
     );
   }
 
@@ -305,35 +228,32 @@ async function handleAnimaStore(args: Record<string, unknown>): Promise<unknown>
   };
 }
 
-async function handleAnimaReflect(args: Record<string, unknown>): Promise<unknown> {
-  const result = await reflectAndSynthesize(
+async function handleAnimaReflect(args: Args): Promise<unknown> {
+  return await reflectAndSynthesize(
     typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   );
-  return result;
 }
 
-async function handleAnimaStats(_args: Record<string, unknown>): Promise<unknown> {
+async function handleAnimaStats(_args: Args): Promise<unknown> {
   return await getStats();
 }
 
-async function handleAnimaAssociate(args: Record<string, unknown>): Promise<unknown> {
-  const ids = Array.isArray(args.memory_ids) ? args.memory_ids as string[] : [];
+async function handleAnimaAssociate(args: Args): Promise<unknown> {
+  const ids = Array.isArray(args.memory_ids) ? (args.memory_ids as string[]) : [];
   if (ids.length < 2) throw new Error("memory_ids must contain at least 2 IDs");
   const ctx = typeof args.session_context === "string" ? args.session_context : undefined;
   await associateMemories(ids, ctx);
   return { associated: ids.length, pairs: (ids.length * (ids.length - 1)) / 2 };
 }
 
-async function handleAnimaQuery(args: Record<string, unknown>): Promise<unknown> {
+async function handleAnimaQuery(args: Args): Promise<unknown> {
   const queryText = args.query as string;
-  if (!queryText || typeof queryText !== "string") {
-    throw new Error("query is required and must be a string");
-  }
+  if (!queryText || typeof queryText !== "string") throw new Error("query is required");
 
   const result = await queryMemories({
     query: queryText,
     limit: typeof args.limit === "number" ? args.limit : 10,
-    tiers: Array.isArray(args.tiers) ? args.tiers as string[] : undefined,
+    tiers: Array.isArray(args.tiers) ? (args.tiers as string[]) : undefined,
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   });
 
@@ -354,10 +274,10 @@ async function handleAnimaQuery(args: Record<string, unknown>): Promise<unknown>
 }
 
 // ============================================================================
-// Message dispatcher
+// JSON-RPC dispatcher
 // ============================================================================
 
-async function handleMessage(msg: Record<string, unknown>): Promise<void> {
+async function dispatch(msg: Record<string, unknown>): Promise<unknown> {
   const { id, method, params } = msg as {
     id: number | string | null;
     method: string;
@@ -365,95 +285,105 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
   };
 
   if (method === "initialize") {
-    sendResult(id, {
-      protocolVersion: "2024-11-05",
-      serverInfo: { name: "anima", version: "2.0.0" },
-      capabilities: { tools: {} },
-    });
-    return;
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: "2024-11-05",
+        serverInfo: { name: "anima", version: "2.0.0" },
+        capabilities: { tools: {} },
+      },
+    };
   }
 
   if (method === "notifications/initialized") {
-    // No response for notifications
-    return;
+    return null; // no response for notifications
   }
 
   if (method === "tools/list") {
-    sendResult(id, { tools: TOOLS });
-    return;
+    return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
   }
 
   if (method === "tools/call") {
     const toolName = (params as Record<string, unknown>)?.name as string;
-    const toolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<string, unknown>;
+    const toolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Args;
 
     try {
       let result: unknown;
-      if (toolName === "anima_bootstrap") {
-        result = await handleAnimaBootstrap(toolArgs);
-      } else if (toolName === "anima_catalysts") {
-        result = await handleAnimaCatalysts(toolArgs);
-      } else if (toolName === "anima_reflect") {
-        result = await handleAnimaReflect(toolArgs);
-      } else if (toolName === "anima_store") {
-        result = await handleAnimaStore(toolArgs);
-      } else if (toolName === "anima_query") {
-        result = await handleAnimaQuery(toolArgs);
-      } else if (toolName === "anima_stats") {
-        result = await handleAnimaStats(toolArgs);
-      } else if (toolName === "anima_associate") {
-        result = await handleAnimaAssociate(toolArgs);
-      } else {
-        sendError(id, -32601, `Unknown tool: ${toolName}`);
-        return;
+      if (toolName === "anima_bootstrap") result = await handleAnimaBootstrap(toolArgs);
+      else if (toolName === "anima_catalysts") result = await handleAnimaCatalysts(toolArgs);
+      else if (toolName === "anima_reflect") result = await handleAnimaReflect(toolArgs);
+      else if (toolName === "anima_store") result = await handleAnimaStore(toolArgs);
+      else if (toolName === "anima_query") result = await handleAnimaQuery(toolArgs);
+      else if (toolName === "anima_stats") result = await handleAnimaStats(toolArgs);
+      else if (toolName === "anima_associate") result = await handleAnimaAssociate(toolArgs);
+      else {
+        return {
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32601, message: `Unknown tool: ${toolName}` },
+        };
       }
-      sendResult(id, {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      });
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] },
+      };
     } catch (err) {
-      console.error(`[anima:mcp] Tool error (${toolName}): ${(err as Error).message}`);
-      sendResult(id, {
-        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-        isError: true,
-      });
+      console.error(`[anima:mcp:http] Tool error (${toolName}): ${(err as Error).message}`);
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        },
+      };
     }
-    return;
   }
 
-  // Unknown method
   if (id !== null && id !== undefined) {
-    sendError(id, -32601, `Method not found: ${method}`);
+    return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
   }
+  return null;
 }
 
 // ============================================================================
-// Stdin reader loop
+// HTTP server
 // ============================================================================
 
-console.error("[anima:mcp] Server starting...");
+const PORT = Number(Deno.env.get("ANIMA_MCP_PORT") ?? "3098");
 
-const decoder = new TextDecoder();
-let buffer = "";
+console.error(`[anima:mcp:http] Starting HTTP MCP server on port ${PORT}...`);
 
-Deno.addSignalListener("SIGTERM", async () => {
-  console.error("[anima:mcp] SIGTERM — shutting down.");
-  await closeDb();
-  Deno.exit(0);
+Deno.serve({ port: PORT, hostname: "127.0.0.1" }, async (req) => {
+  if (req.method === "GET" && new URL(req.url).pathname === "/health") {
+    return new Response(JSON.stringify({ status: "ok", server: "anima-mcp", port: PORT }), {
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  const response = await dispatch(body);
+
+  if (response === null) {
+    return new Response(null, { status: 204 });
+  }
+
+  return new Response(JSON.stringify(response), {
+    headers: { "content-type": "application/json" },
+  });
 });
-
-for await (const chunk of Deno.stdin.readable) {
-  buffer += decoder.decode(chunk, { stream: true });
-  const lines = buffer.split("\n");
-  buffer = lines.pop() ?? "";
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const msg = JSON.parse(trimmed);
-      await handleMessage(msg);
-    } catch (err) {
-      console.error(`[anima:mcp] Parse error: ${(err as Error).message}`);
-    }
-  }
-}

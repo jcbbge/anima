@@ -13,7 +13,7 @@
 # Synthesis worker's LIVE query handles the rest.
 
 INPUT=$(cat)
-PROMPT=$(echo "$INPUT" | /opt/homebrew/bin/jq -r '.prompt // empty' 2>/dev/null)
+PROMPT=$(echo "$INPUT" | /usr/bin/jq -r '.prompt // empty' 2>/dev/null)
 [ -z "$PROMPT" ] && exit 0
 
 # Skip very short prompts (commands, single words)
@@ -31,7 +31,7 @@ TRUNCATED=$(echo "$PROMPT" | head -c 500)
 # Hash for dedup — SurrealDB will handle this, but avoid hitting it with identical rapid-fire prompts
 CONTENT_HASH=$(echo "$TRUNCATED" | md5)
 
-CONTENT_JSON=$(echo "$TRUNCATED" | /opt/homebrew/bin/jq -R -s '.')
+CONTENT_JSON=$(echo "$TRUNCATED" | /usr/bin/jq -R -s '.')
 TAGS_JSON='["hook","interaction"]'
 
 # Write to Anima (NS: anima, DB: memory)
@@ -49,7 +49,7 @@ EOF
   > /tmp/anima_hook_check.json 2>/dev/null
 
 # Only store if not already present (basic dedup without SHA256)
-EXISTING=$(cat /tmp/anima_hook_check.json 2>/dev/null | /opt/homebrew/bin/jq -r '.[0].result[0].count // 0' 2>/dev/null)
+EXISTING=$(cat /tmp/anima_hook_check.json 2>/dev/null | /usr/bin/jq -r '.[0].result[0].count // 0' 2>/dev/null)
 [ "$EXISTING" != "0" ] && exit 0
 
 curl -s -X POST \

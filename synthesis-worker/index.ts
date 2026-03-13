@@ -25,9 +25,8 @@ await loadEnv();
 
 import { getDb, closeDb, query } from "../lib/db.ts";
 import { checkAndSynthesize } from "../lib/synthesize.ts";
-import { generateEmbedding } from "../lib/embed.ts";
+import { generateEmbedding, prewarmEmbedding } from "../lib/embed.ts";
 import type { Memory } from "../lib/memory.ts";
-
 // ============================================================================
 // .env loader
 // ============================================================================
@@ -258,11 +257,16 @@ if (ONCE_MODE) {
   await closeDb();
   Deno.exit(0);
 } else {
+  // Ensure DB connection is established before starting listener
+  await getDb();
+
+  // Prewarm embedding model to avoid first-request cold penalty
+  await prewarmEmbedding();
+
   // Persistent mode — LIVE query loop with reconnection retry
   const RETRY_BASE_MS = 5_000;
   const RETRY_MAX_MS = 60_000;
   let retries = 0;
-
   while (true) {
     try {
       await startLiveListener();

@@ -129,7 +129,7 @@ anima worker logs                 # Tail worker logs
 
 ```
 SurrealDB:   ws://127.0.0.1:8000/rpc  (NS: anima, DB: memory)
-Ollama:      http://localhost:7102     (nomic-embed-text, 768-dim)
+Ollama:      http://localhost:8001     (nomic-embed-text, 768-dim)
 Synthesis:   qwen2.5:0.5b via Ollama
 Worker:      ~/Library/LaunchAgents/anima.synthesis.plist
 Logs:        ~/Library/Logs/anima-synthesis.log

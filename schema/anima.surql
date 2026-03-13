@@ -38,7 +38,7 @@ DEFINE FIELD metadata        ON memories TYPE option<object>;
 DEFINE FIELD conversation_id ON memories TYPE option<string>;
 
 DEFINE FIELD synthesis_mode ON memories TYPE option<string>
-  ASSERT $value IS NONE OR $value INSIDE ['analysis', 'recognition'];
+  ASSERT $value IS NONE OR $value INSIDE ['analysis', 'recognition', 'deepening'];
 
 DEFINE FIELD created_at ON memories TYPE datetime DEFAULT time::now();
 DEFINE FIELD updated_at ON memories TYPE datetime DEFAULT time::now();
@@ -64,7 +64,8 @@ DEFINE TABLE fold_log SCHEMAFULL;
 DEFINE FIELD trigger_type      ON fold_log TYPE string
   ASSERT $value INSIDE ['phi_threshold', 'semantic_conflict', 'cluster', 'reflect', 'catalyst', 'manual'];
 DEFINE FIELD synthesis_mode    ON fold_log TYPE string
-  ASSERT $value INSIDE ['analysis', 'recognition'];
+  ASSERT $value INSIDE ['analysis', 'recognition', 'deepening'];
+DEFINE FIELD synthesis_model   ON fold_log TYPE option<string>;
 DEFINE FIELD conversation_id   ON fold_log TYPE option<string>;
 DEFINE FIELD input_memory_ids  ON fold_log TYPE array;
 DEFINE FIELD output_memory_id  ON fold_log TYPE option<record<memories>>;
@@ -125,16 +126,16 @@ DEFINE INDEX assoc_pair ON memory_associations FIELDS memory_a, memory_b UNIQUE;
 
 
 -- =====================================================
--- CONFIG: System parameters
+-- FOLD_CONFIG: System parameters (renamed to avoid 'config' reserved keyword)
 -- =====================================================
-DEFINE TABLE config SCHEMAFULL;
-DEFINE FIELD key         ON config TYPE string;
-DEFINE FIELD value       ON config TYPE string;
-DEFINE FIELD description ON config TYPE option<string>;
-DEFINE FIELD updated_at  ON config TYPE datetime DEFAULT time::now();
-DEFINE INDEX config_key  ON config FIELDS key UNIQUE;
+DEFINE TABLE fold_config SCHEMAFULL;
+DEFINE FIELD key         ON fold_config TYPE string;
+DEFINE FIELD value       ON fold_config TYPE string;
+DEFINE FIELD description ON fold_config TYPE option<string>;
+DEFINE FIELD updated_at  ON fold_config TYPE datetime DEFAULT time::now();
+DEFINE INDEX fold_config_key  ON fold_config FIELDS key UNIQUE;
 
-INSERT INTO config [
+INSERT INTO fold_config [
   { key: 'phi_threshold',           value: '15.0',                      description: 'Total active-tier phi that triggers autonomous synthesis' },
   { key: 'conflict_similarity',     value: '0.85',                      description: 'Cosine similarity above which memories are considered conflicting' },
   { key: 'cluster_size',            value: '3',                         description: 'Memories in semantic cluster within 1h that triggers synthesis' },

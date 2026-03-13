@@ -83,8 +83,12 @@ export async function query<T = unknown>(
     return (result[0] as T[]) ?? [];
   } catch (err) {
     if (isConnectionError(err)) {
-      console.error("[anima] Connection error detected — resetting db singleton");
+      console.error("[anima] Connection error detected — resetting and retrying once");
       resetDb();
+      // Retry once with a fresh authenticated connection
+      const fresh = await getDb();
+      const result = await fresh.query<T[]>(sql, vars);
+      return (result[0] as T[]) ?? [];
     }
     throw err;
   }

@@ -48,13 +48,17 @@
     <key>SURREAL_DB</key>
     <string>memory</string>
     <key>OLLAMA_URL</key>
-    <string>http://localhost:7102</string>
+    <string>http://localhost:8001</string>
     <key>OLLAMA_MODEL</key>
     <string>nomic-embed-text</string>
     <key>EMBEDDING_DIM</key>
     <string>768</string>
+    <key>SYNTHESIS_PROVIDER</key>
+    <string>groq</string>
     <key>SYNTHESIS_MODEL</key>
-    <string>qwen2.5:0.5b</string>
+    <string>llama-3.1-8b-instant</string>
+    <key>GROQ_API_KEY</key>
+    <string></string>
   </dict>
 
   <key>WorkingDirectory</key>

@@ -21,29 +21,41 @@ await loadEnv();
 
 import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
-import { closeDb } from "../lib/db.ts";
+import { closeDb, query } from "../lib/db.ts";
+import { describeSynthesisConfig } from "../lib/llm.ts";
 
 // ============================================================================
 // .env loader
 // ============================================================================
 
 async function loadEnv(): Promise<void> {
-  try {
-    const envPath = new URL("../.env", import.meta.url);
-    const raw = await Deno.readTextFile(envPath);
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq === -1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      const val = trimmed.slice(eq + 1).trim();
-      if (key && !Deno.env.get(key)) {
-        Deno.env.set(key, val);
+  const candidates = [
+    // Dev mode: relative to source file
+    new URL("../.env", import.meta.url).pathname,
+    // Compiled binary: same directory as binary
+    new URL(".env", import.meta.url).pathname,
+    // Global user config
+    Deno.env.get("HOME") + "/.anima/.env",
+    // Current working directory
+    Deno.cwd() + "/.env",
+    // Explicit project path fallback
+    "/Users/jcbbge/anima/.env",
+  ];
+
+  for (const p of candidates) {
+    try {
+      const raw = await Deno.readTextFile(p);
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        const val = trimmed.slice(eq + 1).trim();
+        if (key && !Deno.env.get(key)) Deno.env.set(key, val);
       }
-    }
-  } catch {
-    // .env optional
+      return; // loaded successfully
+    } catch { /* try next */ }
   }
 }
 
@@ -215,21 +227,95 @@ async function cmdReflect(flags: Record<string, string | boolean>): Promise<void
 async function cmdStats(): Promise<void> {
   const s = await getStats();
   console.log("Anima — System State\n");
-  console.log(`Total memories:  ${s.totalMemories}`);
-  console.log(`Catalysts:       ${s.catalystCount}`);
-  console.log(`Folds run:       ${s.foldCount}`);
-  console.log(`Last fold:       ${s.lastFoldAt ?? "never"}`);
-  console.log(`Worker:          ${s.workerListening ? "listening" : "stopped"}`);
+  console.log("=== MEMORY STATUS ===");
+  console.log(`Total memories stored:  ${s.totalMemories} (accumulated thoughts, insights, moments)`);
+  console.log(`Breakthrough moments:   ${s.catalystCount} (marked as transformative)`);
+  console.log(`Syntheses created:      ${s.foldCount} (moments where patterns were integrated)`);
+  const lastFoldDisplay = s.lastFoldAt ?? "never";
+  const staleWarning = s.synthesisStaleDays !== null ? ` ⚠️  STALE — ${s.synthesisStaleDays}d ago` : "";
+  console.log(`Last synthesis:         ${lastFoldDisplay}${staleWarning}`);
+  console.log(`Worker status:          ${s.workerListening ? "🟢 listening" : "🔴 stopped — run: anima worker start"} (is the nervous system active?)`);
   console.log();
-  console.log("By tier:");
-  for (const [tier, count] of Object.entries(s.byTier).sort()) {
-    console.log(`  ${tier.padEnd(10)} ${count}`);
+
+  console.log("=== MEMORY TIERS (How integrated are your thoughts?) ===");
+  console.log(`  active:   ${String(s.byTier.active || 0).padStart(3)} (new, unverified)`);
+  console.log(`  thread:   ${String(s.byTier.thread || 0).padStart(3)} (accessed/synthesized — becoming useful)`);
+  console.log(`  stable:   ${String(s.byTier.stable || 0).padStart(3)} (repeatedly useful — proven patterns)`);
+  console.log(`  network:  ${String(s.byTier.network || 0).padStart(3)} (identity — foundational to who you are)`);
+  console.log();
+
+  console.log("=== RESONANCE φ (Significance Weight) ===");
+  console.log(`  total weight:  ${s.phiTotal.toFixed(2)} (cumulative significance of all memories)`);
+  console.log(`  average:       ${s.phiAvg.toFixed(2)} (typical importance per memory)`);
+  console.log(`  max:           ${s.phiMax.toFixed(2)} (most significant thing stored)`);
+  console.log();
+  console.log("💡 When phi_total > 15.0, synthesis fires automatically (pattern recognition happens)");
+}
+
+interface FoldLogRecord {
+  id: string;
+  trigger_type: string;
+  synthesis_mode: string;
+  input_memory_ids: string[];
+  synthesis_content: string;
+  phi_before: number;
+  phi_after: number;
+  duration_ms: number;
+  created_at: string;
+}
+
+interface InputMemory {
+  id: string;
+  content: string;
+  resonance_phi: number;
+  tier: string;
+}
+
+async function cmdFoldLog(flags: Record<string, string | boolean>): Promise<void> {
+  const limit = typeof flags.limit === "string" ? parseInt(flags.limit, 10) : 5;
+  const verbose = flags.verbose === true || flags.v === true;
+
+  const folds = await query<FoldLogRecord>(
+    `SELECT id, trigger_type, synthesis_mode, input_memory_ids,
+            synthesis_content, phi_before, phi_after, duration_ms, created_at
+     FROM fold_log ORDER BY created_at DESC LIMIT $limit`,
+    { limit },
+  );
+
+  if (!folds.length) {
+    console.log("No folds recorded yet. Store memories until synthesis triggers, or run: anima reflect");
+    return;
   }
-  console.log();
-  console.log("φ distribution:");
-  console.log(`  total  ${s.phiTotal.toFixed(2)}`);
-  console.log(`  avg    ${s.phiAvg.toFixed(2)}`);
-  console.log(`  max    ${s.phiMax.toFixed(2)}`);
+
+  console.log(`Synthesis provider: ${describeSynthesisConfig()}`);
+  console.log(`${folds.length} fold(s) — most recent first\n`);
+  console.log("─".repeat(60));
+
+  for (const fold of folds) {
+    const date = new Date(fold.created_at).toLocaleString();
+    console.log(`Fold: ${fold.id}`);
+    console.log(`  Date:    ${date}`);
+    console.log(`  Trigger: ${fold.trigger_type}  |  Mode: ${fold.synthesis_mode}`);
+    console.log(`  φ:       ${(fold.phi_before ?? 0).toFixed(2)} → ${(fold.phi_after ?? 0).toFixed(2)}`);
+    console.log(`  Time:    ${fold.duration_ms}ms`);
+    console.log(`  Inputs:  ${fold.input_memory_ids?.length ?? 0} memories`);
+
+    if (verbose && fold.input_memory_ids?.length) {
+      const inputs = await query<InputMemory>(
+        `SELECT id, content, resonance_phi, tier FROM memories WHERE id INSIDE $ids`,
+        { ids: fold.input_memory_ids },
+      );
+      for (const m of inputs) {
+        const preview = m.content.slice(0, 100);
+        const ellipsis = m.content.length > 100 ? "..." : "";
+        console.log(`    [φ${(m.resonance_phi ?? 0).toFixed(1)} ${m.tier}] ${preview}${ellipsis}`);
+      }
+    }
+
+    console.log(`\n  Output:`);
+    console.log(`    ${fold.synthesis_content}`);
+    console.log("\n" + "─".repeat(60));
+  }
 }
 
 async function cmdWorker(subcommand: string): Promise<void> {
@@ -310,6 +396,9 @@ function cmdHelp(): void {
   console.log("  anima worker [status]           Check synthesis worker status");
   console.log("  anima worker start|stop|restart Control synthesis worker");
   console.log("  anima worker logs               Tail synthesis worker logs");
+  console.log("  anima fold-log                  Show recent synthesis fold records");
+  console.log("  anima fold-log --limit 3        Show last 3 folds");
+  console.log("  anima fold-log --verbose        Include input memories for each fold");
   console.log("  anima help                      Show this help");
 }
 
@@ -341,6 +430,9 @@ try {
       break;
     case "worker":
       await cmdWorker(positional[0] ?? "status");
+      break;
+    case "fold-log":
+      await cmdFoldLog(flags);
       break;
     case "help":
     case "--help":

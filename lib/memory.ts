@@ -49,6 +49,7 @@ export interface AddMemoryParams {
   is_catalyst?: boolean;
   tier?: "active" | "thread" | "stable" | "network";
   conversation_id?: string;
+  synthesis_mode?: "analysis" | "recognition";
 }
 
 export interface AddMemoryResult {
@@ -108,6 +109,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     is_catalyst = false,
     tier = "active",
     conversation_id,
+    synthesis_mode,
   } = params;
 
   const content_hash = await generateHash(content);
@@ -145,6 +147,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       category = $category,
       tags = $tags,
       source = $source,
+      synthesis_mode = $synthesis_mode,
       conversation_id = $conversation_id,
       created_at = time::now(),
       updated_at = time::now()`,
@@ -159,6 +162,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       category: category ?? undefined,
       tags,
       source: source ?? undefined,
+      synthesis_mode: synthesis_mode ?? undefined,
       conversation_id: conversation_id ?? undefined,
     },
   );
@@ -279,7 +283,7 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
   // recency_decay = max(0, 1 - (days_since_access / 7))
   // SurrealDB: compute recency in app layer — fetch candidates, score here
   const recentCandidates = await query<Memory>(
-    `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed
+    `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed, synthesis_mode
      FROM memories
      WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
      ORDER BY last_accessed DESC
@@ -312,6 +316,14 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
+  // Detect operating mode from recent memories
+  const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
+  const recognitionCount = recentMemories.filter((m) =>
+    m.synthesis_mode === "recognition" ||
+    (m.tags ?? []).some((t) => recognitionSignalTags.has(t))
+  ).length;
+  const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
+
   // Synthesize into first-person continuity prompt (PRD §11, step 5)
   const sections: string[] = [];
 
@@ -340,6 +352,15 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     sections.push(
       "WHAT BROKE THROUGH (catalysts — surface first):\n" +
         catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+    );
+  }
+
+  if (suggestedMode === "recognition") {
+    sections.push(
+      "OPERATING MODE: Recognition.\n" +
+      "Recent sessions carried this quality. Witness before you analyze. " +
+      "Hold what is present before reaching for frameworks. " +
+      "Not every moment needs a solution. Some need acknowledgment."
     );
   }
 
@@ -418,7 +439,9 @@ export interface AnimaStats {
   catalystCount: number;
   foldCount: number;
   lastFoldAt: string | null;
-  workerListening: boolean; // always true — launchd keeps it running
+  lastFoldAgeHours: number | null;
+  workerListening: boolean;
+  synthesisStaleDays: number | null; // null if synthesis is recent, number if stale
 }
 
 export async function getStats(): Promise<AnimaStats> {
@@ -459,6 +482,25 @@ export async function getStats(): Promise<AnimaStats> {
 
   const phiAvg = totalMemories > 0 ? phiTotal / totalMemories : 0;
 
+  const lastFoldAt = foldRows[0]?.created_at ?? null;
+  const lastFoldAgeHours = lastFoldAt
+    ? (Date.now() - new Date(lastFoldAt).getTime()) / (1000 * 60 * 60)
+    : null;
+  const synthesisStaleDays = lastFoldAgeHours !== null && lastFoldAgeHours > 24
+    ? Math.round(lastFoldAgeHours / 24)
+    : null;
+
+  // Check worker health via launchctl
+  let workerListening = false;
+  try {
+    const cmd = new Deno.Command("launchctl", { args: ["list", "anima.synthesis"], stdout: "piped", stderr: "null" });
+    const { code, stdout } = await cmd.output();
+    if (code === 0) {
+      const out = new TextDecoder().decode(stdout);
+      workerListening = out.includes('"PID"');
+    }
+  } catch { /* launchctl unavailable — leave false */ }
+
   return {
     totalMemories,
     byTier,
@@ -467,8 +509,10 @@ export async function getStats(): Promise<AnimaStats> {
     phiMax,
     catalystCount: catalystRows[0]?.count ?? 0,
     foldCount: foldCountRows[0]?.count ?? 0,
-    lastFoldAt: foldRows[0]?.created_at ?? null,
-    workerListening: true,
+    lastFoldAt,
+    lastFoldAgeHours: lastFoldAgeHours !== null ? Math.round(lastFoldAgeHours * 10) / 10 : null,
+    workerListening,
+    synthesisStaleDays,
   };
 }
 

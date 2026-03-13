@@ -8,6 +8,6 @@
     "worker": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts",
     "worker:once": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --once",
     "worker:dry-run": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --dry-run",
-    "schema": "surreal import --endpoint http://127.0.0.1:8000 --username root --password root --namespace anima --database memory schema/anima.surql"
+    "schema": "surreal import --endpoint http://127.0.0.1:8002 --username root --password root --namespace anima --database memory schema/anima.surql"
   }
 }

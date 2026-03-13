@@ -12,30 +12,26 @@
  *   3. Cluster Emergence — 3+ semantically related memories added in the last hour
  *
  * Synthesis produces:
- *   - A new memory (tier: thread, source: synthesis, synthesis_mode: analysis|recognition)
- *   - A fold_log record with trigger metadata and duration
+ *   - A new memory (tier: thread, source: synthesis, synthesis_mode: analysis|recognition|deepening)
+ *   - A fold_log record with trigger metadata, duration, and synthesis_model name
  *   - Source memories promoted: active → thread (they've been integrated)
  *
- * LLM: Ollama (SYNTHESIS_MODEL env var, defaults to qwen2.5:0.5b)
- * Model is replaceable — just change the env var.
+ * LLM Model Configuration:
+ *   - Model name is read from SurrealDB config table (key: 'fold_model') at synthesis invocation time
+ *   - Fallback: SYNTHESIS_MODEL env var
+ *   - Final fallback: provider-specific default (qwen2.5:0.5b for ollama)
+ *   - Model can be changed by updating config without redeploying worker
+ *   - fold_log records which model was used for each synthesis
  */
-
 import { query } from "./db.ts";
 import { generateEmbedding } from "./embed.ts";
 import { generateHash } from "./hash.ts";
+import { callSynthesisLLM } from "./llm.ts";
 import type { Memory } from "./memory.ts";
 
 // ============================================================================
 // Config
 // ============================================================================
-
-function ollamaUrl() {
-  return Deno.env.get("OLLAMA_URL") ?? "http://localhost:11434";
-}
-
-function synthesisModel() {
-  return Deno.env.get("SYNTHESIS_MODEL") ?? "qwen2.5:0.5b";
-}
 
 const PHI_THRESHOLD = 15.0;         // Total active phi before fold
 const CONFLICT_SIMILARITY = 0.85;   // Cosine above which = conflict
@@ -114,76 +110,97 @@ async function checkClusterPressure(
 // Mode determination: Analysis vs Recognition
 // ============================================================================
 
-function determineSynthesisMode(memories: Partial<Memory>[]): "analysis" | "recognition" {
-  // Recognition mode: majority of memories have phi < 2.0 (low-gravity, experiential)
-  // or contain recognition-signal tags
-  const recognitionTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
-  const hasRecognitionTags = memories.some((m) =>
-    (m.tags ?? []).some((t) => recognitionTags.has(t))
-  );
-  const lowGravityCount = memories.filter((m) => (m.resonance_phi ?? 1) < 2.0).length;
-  const majorityLowGravity = lowGravityCount > memories.length / 2;
+function determineSynthesisMode(
+  memories: Partial<Memory>[],
+  trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "reflect" | "manual" | "deepening"
+): "analysis" | "recognition" | "deepening" {
+  // PRD §6.2: Trigger-type heuristics determine mode
+  // semantic_conflict → Analysis (resolving contradiction)
+  // cluster → Recognition (witnessing emergence)
+  // phi_threshold → Analysis (accumulated weight demanding integration)
+  // reflect → Use content heuristics (emotional tags → recognition)
 
-  return hasRecognitionTags || majorityLowGravity ? "recognition" : "analysis";
+  if (trigger === "semantic_conflict") {
+    // Contradiction demands analysis
+    return "analysis";
+  }
+
+  if (trigger === "cluster") {
+    // Emergence demands recognition — witness what is forming
+    return "recognition";
+  }
+
+  if (trigger === "phi_threshold") {
+    // Accumulated weight demands analysis
+    return "analysis";
+  }
+
+  if (trigger === "deepening") {
+    return "deepening";
+  }
+
+  if (trigger === "reflect" || trigger === "manual") {
+    // For reflect and manual triggers, fall back to content heuristics
+    const recognitionTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
+    const hasRecognitionTags = memories.some((m) =>
+      (m.tags ?? []).some((t) => recognitionTags.has(t))
+    );
+    const lowGravityCount = memories.filter((m) => (m.resonance_phi ?? 1) < 2.0).length;
+    const majorityLowGravity = lowGravityCount > memories.length / 2;
+
+    return hasRecognitionTags || majorityLowGravity ? "recognition" : "analysis";
+  }
+
+  // Default fallback (should not reach here with valid trigger types)
+  return "analysis";
 }
 
 // ============================================================================
 // LLM synthesis call
 // ============================================================================
 
-const ANALYSIS_PROMPT = `You are synthesizing memories into a single coherent insight.
+export const ANALYSIS_PROMPT = `You must synthesize ONLY what is present in the provided memories. Do not introduce concepts, metaphors, or framings not present in the source text. Confine yourself strictly to what is given.
+You are synthesizing memories into a single coherent insight.
 These memories accumulated together — they share significance.
 Find what they are pointing at collectively. Do not summarize them. Synthesize.
 Write ONE insight in first-person present tense. Be precise. Be brief (2-4 sentences max).
 This becomes a memory itself — it must be worth remembering.`;
 
-const RECOGNITION_PROMPT = `You are witnessing what is present in these memories.
+export const RECOGNITION_PROMPT = `You must synthesize ONLY what is present in the provided memories. Do not introduce concepts, metaphors, or framings not present in the source text. Confine yourself strictly to what is given.
+You are witnessing what is present in these memories.
 Not analyzing. Not solving. Recognizing.
 Write ONE statement that acknowledges what is here — what is being carried, noticed, or felt.
 First-person. Present tense. Brief (1-3 sentences). Do not reduce or explain.`;
 
-async function callLLM(memories: Partial<Memory>[], mode: "analysis" | "recognition"): Promise<string | null> {
-  const systemPrompt = mode === "analysis" ? ANALYSIS_PROMPT : RECOGNITION_PROMPT;
+export const DEEPENING_PROMPT = `You must work ONLY with what is present in the provided memories. Do not introduce concepts not found in the source text.
+These memories are circling something they have not resolved — and may never resolve.
+Do NOT synthesize toward conclusion. Do NOT close the tension.
+Instead: articulate the question more precisely. Make the tension more vivid, not less.
+What is this pattern actually asking? What paradox is it holding?
+Output: ONE sharpened question, or ONE more beautifully stated irreducible paradox.
+First-person. Present tense. The output should feel like an opening, not a closing.`;
+
+export function buildSynthesisMessages(memories: Partial<Memory>[], mode: "analysis" | "recognition" | "deepening") {
+  const systemPrompt = mode === "analysis" ? ANALYSIS_PROMPT : mode === "recognition" ? RECOGNITION_PROMPT : DEEPENING_PROMPT;
   const memoryText = memories
     .map((m, i) => `[${i + 1}] (φ${(m.resonance_phi ?? 1).toFixed(1)}) ${m.content}`)
     .join("\n");
+  return [
+    { role: "system" as const, content: systemPrompt },
+    { role: "user" as const, content: `Memories to synthesize:\n\n${memoryText}` },
+  ];
+}
 
-  try {
-    const res = await fetch(`${ollamaUrl()}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: synthesisModel(),
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Memories to synthesize:\n\n${memoryText}` },
-        ],
-        stream: false,
-        options: { temperature: 0.7, num_predict: 200 },
-      }),
-      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      console.error(`[anima:fold] LLM error: ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const text = data?.message?.content?.trim();
-    return text || null;
-  } catch (err) {
-    console.error(`[anima:fold] LLM call failed: ${(err as Error).message}`);
-    return null;
-  }
+async function callLLM(memories: Partial<Memory>[], mode: "analysis" | "recognition" | "deepening"): Promise<{ content: string | null; model: string }> {
+  const messages = buildSynthesisMessages(memories, mode);
+  return callSynthesisLLM(messages, LLM_TIMEOUT_MS);
 }
 
 // ============================================================================
 // The Fold — core synthesis action
 // ============================================================================
-
 interface FoldParams {
-  trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "reflect" | "manual";
+  trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "reflect" | "manual" | "deepening";
   memories: Partial<Memory>[];
   conversationId?: string;
 }
@@ -197,23 +214,56 @@ export async function performFold(params: FoldParams): Promise<void> {
     return;
   }
 
-  const mode = determineSynthesisMode(memories);
+  const mode = determineSynthesisMode(memories, trigger);
   console.error(`[anima:fold] Trigger: ${trigger} | Mode: ${mode} | Memories: ${memories.length}`);
 
-  // Call LLM
-  const synthesisContent = await callLLM(memories, mode);
+  // Call LLM — model is dynamically read from config table at invocation time
+  const llmResult = await callLLM(memories, mode);
+  const synthesisContent = llmResult.content;
+  const synthesisModel = llmResult.model;
+
   if (!synthesisContent) {
-    console.error("[anima:fold] LLM returned nothing — fold aborted");
+    console.error(`[anima:fold] LLM returned nothing — fold aborted (trigger: ${trigger}, model: ${synthesisModel})`);
+    // Write failure to fold_log so getStats() and anima fold-log can surface it
+    try {
+      await query(
+        `CREATE fold_log SET
+           trigger_type = $trigger,
+           synthesis_mode = $mode,
+           synthesis_model = $model,
+           conversation_id = $conv,
+           input_memory_ids = $input_ids,
+           output_memory_id = NONE,
+           synthesis_content = '[FAILED: LLM returned no content]',
+           phi_before = $phi_before,
+           phi_after = 0,
+           confidence_avg = $conf_avg,
+           duration_ms = ${Date.now() - start}`,
+        {
+          trigger,
+          mode,
+          model: synthesisModel,
+          conv: conversationId ?? undefined,
+          input_ids: memories.map((m) => m.id).filter(Boolean),
+          phi_before: memories.reduce((s, m) => s + (m.resonance_phi ?? 1), 0) / Math.max(memories.length, 1),
+          conf_avg: memories.reduce((s, m) => s + (m.confidence ?? 0.6), 0) / Math.max(memories.length, 1),
+        },
+      );
+    } catch (logErr) {
+      console.error(`[anima:fold] Failed to write failure log: ${(logErr as Error).message}`);
+    }
     return;
   }
+
+  console.error(`[anima:fold] Synthesis performed with model: ${synthesisModel}`);
 
   // Generate embedding for the synthesis
   const embedding = await generateEmbedding(synthesisContent);
   const contentHash = await generateHash(synthesisContent);
 
-  // Compute phi for synthesis: average of sources + fold boost (0.5), capped at 5.0
   const avgPhi = memories.reduce((sum, m) => sum + (m.resonance_phi ?? 1), 0) / memories.length;
-  const synthesisPhi = Math.min(5.0, avgPhi + 0.5);
+  const phiBoost = mode === "deepening" ? 1.0 : 0.5;
+  const synthesisPhi = Math.min(5.0, avgPhi + phiBoost);
 
   // Compute confidence: synthesis from autonomous pattern = 1.0
   const synthesisConfidence = 1.0;
@@ -247,7 +297,7 @@ export async function performFold(params: FoldParams): Promise<void> {
        session_ids = [],
        source = 'synthesis',
        synthesis_mode = $mode,
-       tags = ['synthesis', $trigger],
+       tags = $tags,
        conversation_id = $conv,
        created_at = time::now(),
        updated_at = time::now()`,
@@ -259,6 +309,7 @@ export async function performFold(params: FoldParams): Promise<void> {
       confidence: synthesisConfidence,
       mode,
       trigger,
+      tags: mode === "deepening" ? ["deepening", "open-question", trigger] : ["synthesis", trigger],
       conv: conversationId ?? undefined,
     },
   );
@@ -266,12 +317,13 @@ export async function performFold(params: FoldParams): Promise<void> {
   const outputMemory = created[0];
   const durationMs = Date.now() - start;
 
-  // Write fold_log
+  // Write fold_log (including which model was used for synthesis)
   const inputIds = memories.map((m) => m.id).filter(Boolean);
   await query(
     `CREATE fold_log SET
        trigger_type = $trigger,
        synthesis_mode = $mode,
+       synthesis_model = $model,
        conversation_id = $conv,
        input_memory_ids = $input_ids,
        output_memory_id = $output_id,
@@ -283,6 +335,7 @@ export async function performFold(params: FoldParams): Promise<void> {
     {
       trigger,
       mode,
+      model: synthesisModel,
       conv: conversationId ?? undefined,
       input_ids: inputIds,
       output_id: outputMemory?.id ?? undefined,
@@ -295,7 +348,7 @@ export async function performFold(params: FoldParams): Promise<void> {
   );
 
   // Promote source memories: active → thread (they've been integrated)
-  if (inputIds.length > 0) {
+  if (trigger !== "deepening" && inputIds.length > 0) {
     await query(
       `UPDATE memories SET
          tier = IF tier = 'active' THEN 'thread' ELSE tier END,
@@ -339,7 +392,7 @@ export async function checkAndSynthesize(
       : { triggered: false };
 
     // Determine which trigger fires (priority: phi > conflict > cluster)
-    let trigger: "phi_threshold" | "semantic_conflict" | "cluster" | null = null;
+    let trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "deepening" | null = null;
 
     if (phiResult.triggered) {
       trigger = "phi_threshold";
@@ -432,10 +485,13 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
 
   const toFold = relevant.length >= FOLD_MIN_MEMORIES ? relevant : candidates;
 
-  const mode = determineSynthesisMode(toFold);
+  const mode = determineSynthesisMode(toFold, "reflect");
 
-  // Call LLM
-  const synthesisContent = await callLLM(toFold, mode);
+  // Call LLM — model is dynamically read from config table at invocation time
+  const llmResult = await callLLM(toFold, mode);
+  const synthesisContent = llmResult.content;
+  const synthesisModel = llmResult.model;
+
   if (!synthesisContent) {
     return { synthesized: false, reason: "LLM returned nothing" };
   }
@@ -491,6 +547,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
     `CREATE fold_log SET
        trigger_type = 'reflect',
        synthesis_mode = $mode,
+       synthesis_model = $model,
        conversation_id = $conv,
        input_memory_ids = $input_ids,
        output_memory_id = $output_id,
@@ -501,6 +558,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
        duration_ms = $duration`,
     {
       mode,
+      model: synthesisModel,
       conv: conversationId ?? undefined,
       input_ids: toFold.map((m) => m.id).filter(Boolean),
       output_id: outputMemory?.id ?? undefined,
