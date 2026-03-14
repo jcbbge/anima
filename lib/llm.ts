@@ -6,12 +6,7 @@
  * - OpenRouter is the only normal/provider path.
  * - Ollama is intentionally NOT a selectable provider; it is only used as an
  *   emergency, last-resort local fallback for synthesis.
- * - Synthesis model selection supports runtime override from SurrealDB
- *   fold_config (key: fold_model).
  */
-
-import { query } from "./db.ts";
-
 // ============================================================================
 // Endpoints / headers
 // ============================================================================
@@ -56,7 +51,10 @@ export function listProfiles(): typeof PROFILES {
   return PROFILES;
 }
 
-function resolveProfile(name: string | undefined, fallback: keyof typeof PROFILES): {
+function resolveProfile(
+  name: string | undefined,
+  fallback: keyof typeof PROFILES,
+): {
   name: keyof typeof PROFILES;
   profile: ModelProfile;
 } {
@@ -64,7 +62,9 @@ function resolveProfile(name: string | undefined, fallback: keyof typeof PROFILE
   if (candidate in PROFILES) {
     return { name: candidate, profile: PROFILES[candidate] };
   }
-  console.error(`[anima:llm] unknown profile "${candidate}", falling back to "${fallback}"`);
+  console.error(
+    `[anima:llm] unknown profile "${candidate}", falling back to "${fallback}"`,
+  );
   return { name: fallback, profile: PROFILES[fallback] };
 }
 
@@ -98,29 +98,8 @@ interface ResolvedProfileConfig {
   maxTokens: number;
 }
 
-/**
- * Read fold_model from SurrealDB config table.
- * This is checked at invocation time so synthesis model changes apply without redeploy.
- */
-async function readFoldModelFromConfig(): Promise<string | null> {
-  try {
-    // Use SELECT * to avoid SurrealDB 3.0 parser quirk with "SELECT value FROM"
-    const rows = await query<{ value: string }>(
-      `SELECT * FROM fold_config WHERE key = $key LIMIT 1`,
-      { key: "fold_model" },
-    );
-    if (rows.length > 0 && rows[0].value) {
-      const model = rows[0].value.trim();
-      return model.length > 0 ? model : null;
-    }
-  } catch {
-    // Non-fatal: synthesis can still proceed using profile config.
-  }
-  return null;
-}
-
-export async function resolveSynthesisConfig(): Promise<LLMConfig> {
-  const resolved = await resolveSynthesisProfileConfig();
+export function resolveSynthesisConfig(): LLMConfig {
+  const resolved = resolveSynthesisProfileConfig();
   return {
     model: resolved.primaryModel,
     temperature: resolved.temperature,
@@ -137,20 +116,25 @@ export function resolveGraderConfig(): LLMConfig {
   };
 }
 
-async function resolveSynthesisProfileConfig(): Promise<ResolvedProfileConfig> {
-  const { name, profile } = resolveProfile(Deno.env.get("SYNTHESIS_PROFILE") ?? "default", "default");
-  const foldOverrideModel = await readFoldModelFromConfig();
+function resolveSynthesisProfileConfig(): ResolvedProfileConfig {
+  const { name, profile } = resolveProfile(
+    Deno.env.get("SYNTHESIS_PROFILE") ?? "default",
+    "default",
+  );
   return {
     profileName: name,
     profile,
-    primaryModel: foldOverrideModel ?? profile.primary,
+    primaryModel: profile.primary,
     temperature: 0.7,
     maxTokens: 200,
   };
 }
 
 function resolveGraderProfileConfig(): ResolvedProfileConfig {
-  const { name, profile } = resolveProfile(Deno.env.get("GRADER_PROFILE") ?? "capable", "capable");
+  const { name, profile } = resolveProfile(
+    Deno.env.get("GRADER_PROFILE") ?? "capable",
+    "capable",
+  );
   return {
     profileName: name,
     profile,
@@ -159,7 +143,6 @@ function resolveGraderProfileConfig(): ResolvedProfileConfig {
     maxTokens: 400,
   };
 }
-
 // ============================================================================
 // Core call
 // ============================================================================
@@ -170,7 +153,7 @@ export interface ChatMessage {
 }
 
 export interface LLMCallOptions {
-  config?: LLMConfig;            // explicit model config (benchmark/override use)
+  config?: LLMConfig; // explicit model config (benchmark/override use)
   role?: "synthesis" | "grader"; // if config omitted, role decides profile
   timeoutMs?: number;
 }
@@ -209,7 +192,11 @@ async function callOpenRouter(
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      console.error(`[anima:llm] openrouter/${config.model} error ${res.status}: ${body.slice(0, 300)}`);
+      console.error(
+        `[anima:llm] openrouter/${config.model} error ${res.status}: ${
+          body.slice(0, 300)
+        }`,
+      );
       return null;
     }
 
@@ -217,7 +204,11 @@ async function callOpenRouter(
     const text = data?.choices?.[0]?.message?.content?.trim();
     return text || null;
   } catch (err) {
-    console.error(`[anima:llm] openrouter/${config.model} failed: ${(err as Error).message}`);
+    console.error(
+      `[anima:llm] openrouter/${config.model} failed: ${
+        (err as Error).message
+      }`,
+    );
     return null;
   }
 }
@@ -251,7 +242,11 @@ async function callLocalOllamaFallback(
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      console.error(`[anima:llm] ollama/${OLLAMA_FALLBACK_MODEL} error ${res.status}: ${body.slice(0, 300)}`);
+      console.error(
+        `[anima:llm] ollama/${OLLAMA_FALLBACK_MODEL} error ${res.status}: ${
+          body.slice(0, 300)
+        }`,
+      );
       return null;
     }
 
@@ -259,7 +254,11 @@ async function callLocalOllamaFallback(
     const text = data?.choices?.[0]?.message?.content?.trim();
     return text || null;
   } catch (err) {
-    console.error(`[anima:llm] ollama/${OLLAMA_FALLBACK_MODEL} failed: ${(err as Error).message}`);
+    console.error(
+      `[anima:llm] ollama/${OLLAMA_FALLBACK_MODEL} failed: ${
+        (err as Error).message
+      }`,
+    );
     return null;
   }
 }
@@ -275,9 +274,8 @@ export async function callLLMRaw(
   } else if (options.role === "grader") {
     config = resolveGraderConfig();
   } else {
-    config = await resolveSynthesisConfig();
+    config = resolveSynthesisConfig();
   }
-
   const timeoutMs = options.timeoutMs ?? 30_000;
   return await callOpenRouter(messages, config, timeoutMs);
 }
@@ -288,7 +286,7 @@ export async function callLLMRaw(
 
 /**
  * Call synthesis models in order:
- * 1) profile primary (or fold_config override)
+ * 1) profile primary
  * 2) profile fallback1
  * 3) profile fallback2
  * 4) emergency local Ollama fallback (qwen2.5:0.5b)
@@ -297,8 +295,7 @@ export async function callSynthesisLLM(
   messages: ChatMessage[],
   timeoutMs = 30_000,
 ): Promise<{ content: string | null; model: string }> {
-  const resolved = await resolveSynthesisProfileConfig();
-
+  const resolved = resolveSynthesisProfileConfig();
   const modelsToTry = orderedUnique([
     resolved.primaryModel,
     resolved.profile.fallback1,
@@ -327,7 +324,9 @@ export async function callSynthesisLLM(
     return { content: local, model: OLLAMA_FALLBACK_MODEL };
   }
 
-  console.error("[anima:llm] synthesis failed: OpenRouter + emergency ollama fallback both failed");
+  console.error(
+    "[anima:llm] synthesis failed: OpenRouter + emergency ollama fallback both failed",
+  );
   return { content: null, model: resolved.primaryModel };
 }
 
@@ -356,7 +355,9 @@ export async function callGraderLLM(
     if (content) return content;
   }
 
-  console.error("[anima:llm] grader failed: all OpenRouter profile models failed");
+  console.error(
+    "[anima:llm] grader failed: all OpenRouter profile models failed",
+  );
   return null;
 }
 
@@ -365,7 +366,7 @@ export async function callGraderLLM(
 // ============================================================================
 
 export async function describeSynthesisConfig(): Promise<string> {
-  const resolved = await resolveSynthesisProfileConfig();
+  const resolved = resolveSynthesisProfileConfig();
   return `openrouter/${resolved.primaryModel} [profile:${resolved.profileName}]`;
 }
 
@@ -373,5 +374,3 @@ export function describeGraderConfig(): string {
   const resolved = resolveGraderProfileConfig();
   return `openrouter/${resolved.primaryModel} [profile:${resolved.profileName}]`;
 }
-
-export { readFoldModelFromConfig };
