@@ -287,7 +287,7 @@ async function cmdFoldLog(flags: Record<string, string | boolean>): Promise<void
     return;
   }
 
-  console.log(`Synthesis provider: ${describeSynthesisConfig()}`);
+  console.log(`Synthesis provider: ${await describeSynthesisConfig()}`);
   console.log(`${folds.length} fold(s) — most recent first\n`);
   console.log("─".repeat(60));
 

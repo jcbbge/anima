@@ -1,52 +1,63 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>EnvironmentVariables</key>
-	<dict>
-		<key>GRADER_PROFILE</key>
-		<string>capable</string>
-		<key>OLLAMA_MODEL</key>
-		<string>nomic-embed-text</string>
-		<key>OLLAMA_URL</key>
-		<string>http://localhost:8001</string>
-		<key>OPENROUTER_API_KEY</key>
-		<string>REPLACE_WITH_KEY</string>
-		<key>SURREAL_DB</key>
-		<string>memory</string>
-		<key>SURREAL_NS</key>
-		<string>anima</string>
-		<key>SURREAL_PASS</key>
-		<string>root</string>
-		<key>SURREAL_URL</key>
-		<string>ws://127.0.0.1:8000/rpc</string>
-		<key>SURREAL_USER</key>
-		<string>root</string>
-		<key>SYNTHESIS_PROFILE</key>
-		<string>default</string>
-	</dict>
-	<key>KeepAlive</key>
-	<true/>
-	<key>Label</key>
-	<string>anima.synthesis</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>/opt/homebrew/bin/deno</string>
-		<string>run</string>
-		<string>--allow-net</string>
-		<string>--allow-env</string>
-		<string>--allow-read</string>
-		<string>/Users/jcbbge/anima/synthesis-worker/index.ts</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>StandardErrorPath</key>
-	<string>/Users/jcbbge/Library/Logs/anima-synthesis.log</string>
-	<key>StandardOutPath</key>
-	<string>/Users/jcbbge/Library/Logs/anima-synthesis.log</string>
-	<key>ThrottleInterval</key>
-	<integer>10</integer>
-	<key>WorkingDirectory</key>
-	<string>/Users/jcbbge/anima</string>
+  <key>Label</key>
+  <string>anima.synthesis</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/deno</string>
+    <string>run</string>
+    <string>--allow-net</string>
+    <string>--allow-env</string>
+    <string>--allow-read</string>
+    <string>/Users/jcbbge/anima/synthesis-worker/index.ts</string>
+  </array>
+
+  <!-- launchd restarts the worker if it exits for any reason -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Wait 10s before restarting on crash -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- Run at load (on login) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Logs -->
+  <key>StandardOutPath</key>
+  <string>/Users/jcbbge/Library/Logs/anima-synthesis.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jcbbge/Library/Logs/anima-synthesis.log</string>
+
+  <!-- Environment -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SURREAL_URL</key>
+    <string>ws://127.0.0.1:8002/rpc</string>
+    <key>SURREAL_USER</key>
+    <string>root</string>
+    <key>SURREAL_PASS</key>
+    <string>root</string>
+    <key>SURREAL_NS</key>
+    <string>anima</string>
+    <key>SURREAL_DB</key>
+    <string>memory</string>
+    <key>OLLAMA_URL</key>
+    <string>http://localhost:8001</string>
+    <key>OLLAMA_MODEL</key>
+    <string>nomic-embed-text</string>
+    <key>EMBEDDING_DIM</key>
+    <string>768</string>
+    <key>OPENROUTER_API_KEY</key>
+    <string>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</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/jcbbge/anima</string>
 </dict>
 </plist>
