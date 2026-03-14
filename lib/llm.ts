@@ -173,7 +173,7 @@ async function callOpenRouter(
     "Content-Type": "application/json",
     "Authorization": `Bearer ${apiKey}`,
     "HTTP-Referer": OPENROUTER_REFERER,
-    "X-Title": OPENROUTER_TITLE,
+    "X-OpenRouter-Title": OPENROUTER_TITLE,
   };
 
   try {
