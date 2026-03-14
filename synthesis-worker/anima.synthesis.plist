@@ -59,5 +59,8 @@
 
   <key>WorkingDirectory</key>
   <string>/Users/jcbbge/anima</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
 </dict>
 </plist>
