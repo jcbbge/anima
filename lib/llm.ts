@@ -31,19 +31,19 @@ export interface ModelProfile {
 
 export const PROFILES = {
   default: {
-    primary: "google/gemma-3-12b-it:free",
-    fallback1: "meta-llama/llama-3.3-70b-instruct:free",
-    fallback2: "mistralai/mistral-small-3.1-24b-instruct:free",
+    primary: "qwen/qwen3.5-9b",
+    fallback1: "meta-llama/llama-3.3-70b-instruct",
+    fallback2: "qwen/qwen3-32b",
   },
   fast: {
-    primary: "google/gemma-3-4b-it:free",
-    fallback1: "meta-llama/llama-3.1-8b-instruct:free",
-    fallback2: "google/gemma-3-12b-it:free",
+    primary: "qwen/qwen3.5-9b",
+    fallback1: "qwen/qwen3-32b",
+    fallback2: "meta-llama/llama-3.1-8b-instruct",
   },
   capable: {
-    primary: "google/gemma-3-27b-it:free",
-    fallback1: "meta-llama/llama-3.3-70b-instruct:free",
-    fallback2: "deepseek/deepseek-r1-distill-llama-70b:free",
+    primary: "qwen/qwen3-32b",
+    fallback1: "meta-llama/llama-3.3-70b-instruct",
+    fallback2: "qwen/qwen3.5-9b",
   },
 } as const satisfies Record<string, ModelProfile>;
 
