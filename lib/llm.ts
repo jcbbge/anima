@@ -31,19 +31,19 @@ export interface ModelProfile {
 
 export const PROFILES = {
   default: {
-    primary: "qwen/qwen3.5-9b",
-    fallback1: "meta-llama/llama-3.3-70b-instruct",
-    fallback2: "qwen/qwen3-32b",
+    primary: "meta-llama/llama-3.3-70b-instruct",
+    fallback1: "meta-llama/llama-3.1-8b-instruct",
+    fallback2: "mistralai/mistral-7b-instruct",
   },
   fast: {
-    primary: "qwen/qwen3.5-9b",
-    fallback1: "qwen/qwen3-32b",
-    fallback2: "meta-llama/llama-3.1-8b-instruct",
+    primary: "meta-llama/llama-3.1-8b-instruct",
+    fallback1: "mistralai/mistral-7b-instruct",
+    fallback2: "meta-llama/llama-3.3-70b-instruct",
   },
   capable: {
-    primary: "qwen/qwen3-32b",
-    fallback1: "meta-llama/llama-3.3-70b-instruct",
-    fallback2: "qwen/qwen3.5-9b",
+    primary: "meta-llama/llama-3.3-70b-instruct",
+    fallback1: "mistralai/mistral-7b-instruct",
+    fallback2: "meta-llama/llama-3.1-8b-instruct",
   },
 } as const satisfies Record<string, ModelProfile>;
 
@@ -314,20 +314,10 @@ export async function callSynthesisLLM(
     }
   }
 
-  console.error(
-    "[anima:llm] all OpenRouter synthesis models failed; " +
-      "attempting emergency local ollama fallback (qwen2.5:0.5b)",
+  throw new Error(
+    `[anima:llm] all OpenRouter synthesis models failed (tried: ${modelsToTry.join(", ")}). ` +
+    `Check OPENROUTER_API_KEY and model availability.`,
   );
-
-  const local = await callLocalOllamaFallback(messages, timeoutMs);
-  if (local) {
-    return { content: local, model: OLLAMA_FALLBACK_MODEL };
-  }
-
-  console.error(
-    "[anima:llm] synthesis failed: OpenRouter + emergency ollama fallback both failed",
-  );
-  return { content: null, model: resolved.primaryModel };
 }
 
 // ============================================================================

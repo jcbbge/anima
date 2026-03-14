@@ -52,7 +52,7 @@ async function loadEnv(): Promise<void> {
         if (eq === -1) continue;
         const key = trimmed.slice(0, eq).trim();
         const val = trimmed.slice(eq + 1).trim();
-        if (key && !Deno.env.get(key)) Deno.env.set(key, val);
+        if (key) Deno.env.set(key, val);
       }
       return; // loaded successfully
     } catch { /* try next */ }
