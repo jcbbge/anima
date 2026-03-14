@@ -39,26 +39,24 @@
   <dict>
     <key>SURREAL_URL</key>
     <string>ws://127.0.0.1:8000/rpc</string>
-    <key>SURREAL_USER</key>
-    <string>root</string>
-    <key>SURREAL_PASS</key>
-    <string>root</string>
     <key>SURREAL_NS</key>
     <string>anima</string>
     <key>SURREAL_DB</key>
     <string>memory</string>
+    <key>SURREAL_USER</key>
+    <string>root</string>
+    <key>SURREAL_PASS</key>
+    <string>root</string>
     <key>OLLAMA_URL</key>
     <string>http://localhost:8001</string>
     <key>OLLAMA_MODEL</key>
     <string>nomic-embed-text</string>
-    <key>EMBEDDING_DIM</key>
-    <string>768</string>
-    <key>SYNTHESIS_PROVIDER</key>
-    <string>groq</string>
-    <key>SYNTHESIS_MODEL</key>
-    <string>llama-3.1-8b-instant</string>
-    <key>GROQ_API_KEY</key>
+    <key>OPENROUTER_API_KEY</key>
     <string></string>
+    <key>SYNTHESIS_PROFILE</key>
+    <string>default</string>
+    <key>GRADER_PROFILE</key>
+    <string>capable</string>
   </dict>
 
   <key>WorkingDirectory</key>

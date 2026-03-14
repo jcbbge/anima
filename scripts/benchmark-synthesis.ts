@@ -16,7 +16,7 @@
  * Candidate models are configured via BENCHMARK_CANDIDATES env var (JSON array)
  * or fall back to the defaults below.
  *
- * Grader: GRADER_PROVIDER / GRADER_MODEL (default: groq/llama-3.3-70b-versatile)
+ * Grader: GRADER_PROVIDER / GRADER_MODEL (defaults configured in lib/llm.ts)
  */
 
 // Load .env before importing lib/
@@ -26,7 +26,7 @@ import { query } from "../lib/db.ts";
 import { closeDb } from "../lib/db.ts";
 import { buildSynthesisMessages } from "../lib/synthesize.ts";
 import { callLLMRaw, callGraderLLM, describeGraderConfig } from "../lib/llm.ts";
-import type { LLMConfig, ProviderID } from "../lib/llm.ts";
+import type { LLMConfig } from "../lib/llm.ts";
 
 // ============================================================================
 // .env loader (mirrors cli/anima.ts)
@@ -100,16 +100,11 @@ interface FoldBenchmark {
 // ============================================================================
 
 const DEFAULT_CANDIDATES: LLMConfig[] = [
-  // Current production model (baseline)
-  { provider: "ollama", model: "qwen2.5:0.5b", temperature: 0.7, maxTokens: 200 },
-  // Groq fast
-  { provider: "groq", model: "llama-3.1-8b-instant", temperature: 0.7, maxTokens: 200 },
-  // Groq capable
-  { provider: "groq", model: "llama-3.3-70b-versatile", temperature: 0.7, maxTokens: 200 },
-  // OpenRouter free — strong general model
-  { provider: "openrouter", model: "mistralai/mistral-small-3.1-24b-instruct:free", temperature: 0.7, maxTokens: 200 },
-  // OpenRouter free — largest available
-  { provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.7, maxTokens: 200 },
+  { model: "google/gemma-3-12b-it:free", temperature: 0.7, maxTokens: 200 },
+  { model: "google/gemma-3-27b-it:free", temperature: 0.7, maxTokens: 200 },
+  { model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.7, maxTokens: 200 },
+  { model: "mistralai/mistral-small-3.1-24b-instruct:free", temperature: 0.7, maxTokens: 200 },
+  { model: "deepseek/deepseek-r1-distill-llama-70b:free", temperature: 0.7, maxTokens: 200 },
 ];
 
 function loadCandidates(): LLMConfig[] {
@@ -125,7 +120,7 @@ function loadCandidates(): LLMConfig[] {
 }
 
 function candidateLabel(config: LLMConfig): string {
-  return `${config.provider}/${config.model}`;
+  return config.model;
 }
 
 // ============================================================================
