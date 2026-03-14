@@ -11,7 +11,7 @@
 		<key>OLLAMA_URL</key>
 		<string>http://localhost:8001</string>
 		<key>OPENROUTER_API_KEY</key>
-		<string>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</string>
+		<string>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</string>
 		<key>SURREAL_DB</key>
 		<string>memory</string>
 		<key>SURREAL_NS</key>
