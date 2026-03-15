@@ -16,6 +16,22 @@ import { generateHash } from "./hash.ts";
 // Types
 // ============================================================================
 
+export interface MemoryOrigin {
+  harness?: string;           // tool identity: claude-code, opencode, slate, omp, …
+  harness_type?: string;      // cli | ide | desktop | native | api (free string — categories unsettled)
+  inference_gateway?: string; // direct | openrouter | opencode | ide-bundled | …
+  provider?: string;          // anthropic | google | openai | mistral | …
+  model?: string;             // exact model string: claude-sonnet-4-6, gpt-4o, …
+  agent_profile?: string;     // free string: coding | reasoning | meta | quick | …
+  instance_id?: string;       // unique session identifier
+}
+
+export interface AttentionVector {
+  what_drew_me?: string;
+  where_i_was_going?: string;
+  what_i_would_follow_next?: string;
+}
+
 export interface Memory {
   id: string;
   content: string;
@@ -31,9 +47,13 @@ export interface Memory {
   category: string | null;
   tags: string[];
   source: string | null;
+  origin: MemoryOrigin | null;
+  attention_vector: AttentionVector | null;
   metadata: Record<string, unknown> | null;
   conversation_id: string | null;
-  synthesis_mode: "analysis" | "recognition" | null;
+  synthesis_mode: "analysis" | "recognition" | "deepening" | null;
+  related_curiosity: string | null;
+  related_tension: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -44,12 +64,14 @@ export interface AddMemoryParams {
   category?: string;
   tags?: string[];
   source?: string;
+  origin?: MemoryOrigin;
+  attention_vector?: AttentionVector;
   resonance_phi?: number;
   confidence?: number;
   is_catalyst?: boolean;
   tier?: "active" | "thread" | "stable" | "network";
   conversation_id?: string;
-  synthesis_mode?: "analysis" | "recognition";
+  synthesis_mode?: "analysis" | "recognition" | "deepening";
 }
 
 export interface AddMemoryResult {
@@ -104,6 +126,8 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     category,
     tags = [],
     source,
+    origin,
+    attention_vector,
     resonance_phi = 1.0,
     confidence = 0.6,
     is_catalyst = false,
@@ -147,6 +171,8 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       category = $category,
       tags = $tags,
       source = $source,
+      origin = $origin,
+      attention_vector = $attention_vector,
       synthesis_mode = $synthesis_mode,
       conversation_id = $conversation_id,
       created_at = time::now(),
@@ -162,6 +188,8 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
       category: category ?? undefined,
       tags,
       source: source ?? undefined,
+      origin: origin ?? undefined,
+      attention_vector: attention_vector ?? undefined,
       synthesis_mode: synthesis_mode ?? undefined,
       conversation_id: conversation_id ?? undefined,
     },

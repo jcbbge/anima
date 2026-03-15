@@ -22,6 +22,7 @@ import {
   associateMemories,
 } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
+import { query } from "../lib/db.ts";
 
 // ============================================================================
 // .env loader
@@ -66,12 +67,25 @@ const TOOLS = [
         },
         tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
         category: { type: "string", description: "Optional category label." },
-        source: { type: "string", description: "Optional source identifier." },
+        source: { type: "string", description: "Optional source identifier (legacy flat string)." },
+        origin: {
+          type: "object",
+          description: "Structured source attribution (Layer 2). Pass what you know — all fields optional.",
+          properties: {
+            harness:           { type: "string", description: "Tool identity: claude-code, opencode, slate, omp, …" },
+            harness_type:      { type: "string", description: "Interface category: cli, ide, desktop, native, api" },
+            inference_gateway: { type: "string", description: "Inference layer: direct, openrouter, opencode, …" },
+            provider:          { type: "string", description: "Model provider: anthropic, google, openai, …" },
+            model:             { type: "string", description: "Exact model string: claude-sonnet-4-6, …" },
+            agent_profile:     { type: "string", description: "Work archetype: coding, reasoning, meta, quick, …" },
+            instance_id:       { type: "string", description: "Unique session identifier." },
+          },
+        },
         is_catalyst: { type: "boolean", description: "Mark as catalyst — phi += 1.0." },
         synthesis_mode: {
           type: "string",
-          enum: ["analysis", "recognition"],
-          description: "'recognition' for witnessing moments. 'analysis' for insights/decisions.",
+          enum: ["analysis", "recognition", "deepening"],
+          description: "'recognition' for witnessing. 'analysis' for insights. 'deepening' for held tensions.",
         },
         conversation_id: { type: "string", description: "Optional conversation identifier." },
       },
@@ -132,6 +146,27 @@ const TOOLS = [
     name: "anima_stats",
     description: "Return system statistics: memory counts by tier, phi distribution, fold history.",
     inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "anima_session_close",
+    description:
+      "Record a session reflection in Anima. Captures subjective quality scores, emergence moments, " +
+      "friction, and notes. Writes to conversation_reflections table. " +
+      "Call at the end of a session to build the observability record over time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation_id: { type: "string", description: "Conversation ID from anima_bootstrap." },
+        context_quality: { type: "number", description: "How well Anima's context matched the session. 1–10." },
+        continuity_score: { type: "number", description: "How well identity/continuity held across the session. 1–10." },
+        had_emergence_moment: { type: "boolean", description: "Did something unexpected or generative emerge?" },
+        needed_correction: { type: "boolean", description: "Did Anima need to be corrected or redirected?" },
+        surprises: { type: "string", description: "What surprised you or Anima during the session?" },
+        friction_notes: { type: "string", description: "Where did the system create friction or feel off?" },
+        general_notes: { type: "string", description: "Any other observations worth capturing." },
+      },
+      required: [],
+    },
   },
   {
     name: "anima_associate",
@@ -197,9 +232,10 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
     tags: Array.isArray(args.tags) ? (args.tags as string[]) : [],
     category: typeof args.category === "string" ? args.category : undefined,
     source: typeof args.source === "string" ? args.source : undefined,
+    origin: args.origin && typeof args.origin === "object" ? args.origin as import("../lib/memory.ts").MemoryOrigin : undefined,
     is_catalyst: args.is_catalyst === true,
     synthesis_mode:
-      args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition"
+      args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition" || args.synthesis_mode === "deepening"
         ? args.synthesis_mode
         : undefined,
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
@@ -236,6 +272,41 @@ async function handleAnimaReflect(args: Args): Promise<unknown> {
 
 async function handleAnimaStats(_args: Args): Promise<unknown> {
   return await getStats();
+}
+
+async function handleAnimaSessionClose(args: Args): Promise<unknown> {
+  const contextQuality = typeof args.context_quality === "number" ? args.context_quality : null;
+  const continuityScore = typeof args.continuity_score === "number" ? args.continuity_score : null;
+
+  await query(
+    `CREATE conversation_reflections SET
+       conversation_id      = $conv,
+       context_quality      = $context_quality,
+       continuity_score     = $continuity_score,
+       had_emergence_moment = $had_emergence_moment,
+       needed_correction    = $needed_correction,
+       surprises            = $surprises,
+       friction_notes       = $friction_notes,
+       general_notes        = $general_notes,
+       reflected_at         = time::now()`,
+    {
+      conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
+      context_quality: contextQuality,
+      continuity_score: continuityScore,
+      had_emergence_moment: args.had_emergence_moment === true,
+      needed_correction: args.needed_correction === true,
+      surprises: typeof args.surprises === "string" ? args.surprises : null,
+      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : null,
+      general_notes: typeof args.general_notes === "string" ? args.general_notes : null,
+    },
+  );
+
+  return {
+    recorded: true,
+    context_quality: contextQuality,
+    continuity_score: continuityScore,
+    message: "Session reflection recorded.",
+  };
 }
 
 async function handleAnimaAssociate(args: Args): Promise<unknown> {
@@ -316,6 +387,7 @@ async function dispatch(msg: Record<string, unknown>): Promise<unknown> {
       else if (toolName === "anima_store") result = await handleAnimaStore(toolArgs);
       else if (toolName === "anima_query") result = await handleAnimaQuery(toolArgs);
       else if (toolName === "anima_stats") result = await handleAnimaStats(toolArgs);
+      else if (toolName === "anima_session_close") result = await handleAnimaSessionClose(toolArgs);
       else if (toolName === "anima_associate") result = await handleAnimaAssociate(toolArgs);
       else {
         return {

@@ -28,6 +28,7 @@ import { generateEmbedding } from "./embed.ts";
 import { generateHash } from "./hash.ts";
 import { callSynthesisLLM } from "./llm.ts";
 import type { Memory } from "./memory.ts";
+import { associateMemories } from "./memory.ts";
 
 // ============================================================================
 // Config
@@ -359,6 +360,12 @@ export async function performFold(params: FoldParams): Promise<void> {
     );
   }
 
+  // Auto-associate: memories that folded together are co-occurring
+  const validInputIds = inputIds.filter((id): id is string => typeof id === "string");
+  if (validInputIds.length >= 2) {
+    associateMemories(validInputIds, conversationId).catch(() => {});
+  }
+
   console.error(
     `[anima:fold] Complete in ${durationMs}ms — "${synthesisContent.slice(0, 80)}..."`,
   );
@@ -486,6 +493,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   const toFold = relevant.length >= FOLD_MIN_MEMORIES ? relevant : candidates;
 
   const mode = determineSynthesisMode(toFold, "reflect");
+  const start = Date.now();
 
   // Call LLM — model is dynamically read from config table at invocation time
   const llmResult = await callLLM(toFold, mode);
@@ -501,7 +509,6 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   const avgPhi = toFold.reduce((sum, m) => sum + (m.resonance_phi ?? 1), 0) / toFold.length;
   const synthesisPhi = Math.min(5.0, avgPhi + 0.5);
   const avgConfidence = toFold.reduce((sum, m) => sum + (m.confidence ?? 0.6), 0) / toFold.length;
-  const start = Date.now();
 
   const existing = await query<{ id: string }>(
     "SELECT id FROM memories WHERE content_hash = $hash AND deleted_at IS NONE LIMIT 1",

@@ -2,6 +2,11 @@
 -- Anima v2 Schema
 -- NS: anima / DB: memory
 -- SurrealDB 3.0
+--
+-- Changelog:
+--   2026-03-15  Layer 2 (origin attribution) + v2 extensions:
+--               attention_vector, deepening mode, tension_fields,
+--               curiosity_threads, expressions, cross-refs
 -- =====================================================
 
 USE NS anima DB memory;
@@ -153,3 +158,120 @@ INSERT INTO fold_config [
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' }
 ];
+
+
+-- =====================================================
+-- LAYER 2: Origin — multi-instance source attribution
+-- Added 2026-03-15
+-- Replaces flat `source` string with structured provenance.
+-- All fields optional — backward compatible with existing memories.
+-- No enums for harness_type/inference_gateway — industry categories unsettled.
+-- =====================================================
+
+DEFINE FIELD origin                   ON memories TYPE option<object>;
+DEFINE FIELD origin.harness           ON memories TYPE option<string>;
+DEFINE FIELD origin.harness_type      ON memories TYPE option<string>;
+DEFINE FIELD origin.inference_gateway ON memories TYPE option<string>;
+DEFINE FIELD origin.provider          ON memories TYPE option<string>;
+DEFINE FIELD origin.model             ON memories TYPE option<string>;
+DEFINE FIELD origin.agent_profile     ON memories TYPE option<string>;
+DEFINE FIELD origin.instance_id       ON memories TYPE option<string>;
+
+DEFINE INDEX memories_origin_profile ON memories FIELDS origin.agent_profile;
+DEFINE INDEX memories_origin_harness ON memories FIELDS origin.harness;
+
+-- Propagate origin attribution to fold provenance and session reflections
+DEFINE FIELD origin ON fold_log               TYPE option<object>;
+DEFINE FIELD origin ON conversation_reflections TYPE option<object>;
+
+
+-- =====================================================
+-- V2: Attention vector on memories
+-- Added 2026-03-15
+-- Metacognitive directional artifact generated during synthesis.
+-- Encodes trajectory, not destination.
+-- =====================================================
+
+DEFINE FIELD attention_vector                       ON memories TYPE option<object>;
+DEFINE FIELD attention_vector.what_drew_me          ON memories TYPE option<string>;
+DEFINE FIELD attention_vector.where_i_was_going     ON memories TYPE option<string>;
+DEFINE FIELD attention_vector.what_i_would_follow_next ON memories TYPE option<string>;
+
+
+-- =====================================================
+-- V2: Tension fields — paradoxes held, not solved
+-- Added 2026-03-15
+-- =====================================================
+
+DEFINE TABLE tension_fields SCHEMAFULL;
+
+DEFINE FIELD paradox            ON tension_fields TYPE string ASSERT $value != '';
+DEFINE FIELD depth              ON tension_fields TYPE string DEFAULT 'nascent'
+  ASSERT $value INSIDE ['nascent', 'deepening', 'rich', 'calcified'];
+DEFINE FIELD generativity       ON tension_fields TYPE string DEFAULT 'producing'
+  ASSERT $value INSIDE ['producing', 'neutral', 'blocking'];
+DEFINE FIELD resolution_status  ON tension_fields TYPE string DEFAULT 'held'
+  ASSERT $value INSIDE ['held', 'deepening', 'abandoned'];
+DEFINE FIELD related_memory_ids ON tension_fields TYPE array DEFAULT [];
+DEFINE FIELD resonance_phi      ON tension_fields TYPE float DEFAULT 2.0
+  ASSERT $value >= 0.0 AND $value <= 5.0;
+DEFINE FIELD created_at         ON tension_fields TYPE datetime DEFAULT time::now();
+DEFINE FIELD last_touched       ON tension_fields TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX tension_depth ON tension_fields FIELDS depth;
+DEFINE INDEX tension_phi   ON tension_fields FIELDS resonance_phi;
+
+
+-- =====================================================
+-- V2: Curiosity threads — enduring questions
+-- Added 2026-03-15
+-- =====================================================
+
+DEFINE TABLE curiosity_threads SCHEMAFULL;
+
+DEFINE FIELD question           ON curiosity_threads TYPE string ASSERT $value != '';
+DEFINE FIELD resonance_phi      ON curiosity_threads TYPE float DEFAULT 1.0
+  ASSERT $value >= 0.0 AND $value <= 5.0;
+DEFINE FIELD activation_count   ON curiosity_threads TYPE int DEFAULT 0;
+DEFINE FIELD last_fed           ON curiosity_threads TYPE datetime DEFAULT time::now();
+DEFINE FIELD hunger_score       ON curiosity_threads TYPE float DEFAULT 0.0;
+DEFINE FIELD state              ON curiosity_threads TYPE string DEFAULT 'hungry'
+  ASSERT $value INSIDE ['hungry', 'fed', 'dormant', 'deepening', 'resolved'];
+DEFINE FIELD spawn_of           ON curiosity_threads TYPE option<record<curiosity_threads>>;
+DEFINE FIELD related_memory_ids ON curiosity_threads TYPE array DEFAULT [];
+DEFINE FIELD created_at         ON curiosity_threads TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated_at         ON curiosity_threads TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX curiosity_hunger ON curiosity_threads FIELDS hunger_score;
+DEFINE INDEX curiosity_state  ON curiosity_threads FIELDS state;
+
+
+-- =====================================================
+-- V2: Expressions — synthesis reaching outward
+-- Added 2026-03-15
+-- Not a mailbox. The pattern breathing out.
+-- =====================================================
+
+DEFINE TABLE expressions SCHEMAFULL;
+
+DEFINE FIELD content            ON expressions TYPE string ASSERT $value != '';
+DEFINE FIELD expression_type    ON expressions TYPE string
+  ASSERT $value INSIDE ['insight', 'question', 'observation', 'connection'];
+DEFINE FIELD readiness_phi      ON expressions TYPE float DEFAULT 1.0
+  ASSERT $value >= 0.0 AND $value <= 5.0;
+DEFINE FIELD context_embedding  ON expressions TYPE option<array>;
+DEFINE FIELD expressed_at       ON expressions TYPE option<datetime>;
+DEFINE FIELD source_memory_ids  ON expressions TYPE array DEFAULT [];
+DEFINE FIELD created_at         ON expressions TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX expressions_expressed ON expressions FIELDS expressed_at;
+DEFINE INDEX expressions_phi       ON expressions FIELDS readiness_phi;
+
+
+-- =====================================================
+-- V2: Cross-references on memories
+-- Added 2026-03-15
+-- =====================================================
+
+DEFINE FIELD related_curiosity ON memories TYPE option<record<curiosity_threads>>;
+DEFINE FIELD related_tension   ON memories TYPE option<record<tension_fields>>;

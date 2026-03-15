@@ -1,1 +1,0 @@
-/Users/jcbbge/Documents/AGENTS.md
