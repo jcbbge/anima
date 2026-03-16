@@ -105,7 +105,16 @@ export interface BootstrapResult {
     stable: number;
     recent: number;
     catalysts: number;
+    trail: number;
   };
+}
+
+export interface TrailEntry {
+  id: string;
+  trajectory: string;
+  warmth: number;
+  next_pull: string | null;
+  created_at: string;
 }
 
 export interface GetCatalystsParams {
@@ -359,6 +368,26 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
+  // Layer 5: SESSION TRAIL — last entries with effective warmth > 1.0
+  // Lazy warmth decay: effective_warmth = warmth - (days_since_created * 0.1)
+  // No background job needed — computed at read time.
+  const trailCandidates = await query<TrailEntry>(
+    `SELECT id, trajectory, warmth, next_pull, created_at
+     FROM session_trail
+     ORDER BY created_at DESC
+     LIMIT 10`,
+    {},
+  );
+
+  const trailEntries = trailCandidates
+    .map((t) => {
+      const daysSince = (now - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      const effectiveWarmth = (t.warmth ?? 3.0) - (daysSince * 0.1);
+      return { ...t, effectiveWarmth };
+    })
+    .filter((t) => t.effectiveWarmth > 1.0)
+    .slice(0, 3);
+
   // Detect operating mode from recent memories
   const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
   const recognitionCount = recentMemories.filter((m) =>
@@ -395,6 +424,19 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     sections.push(
       "WHAT BROKE THROUGH (catalysts — surface first):\n" +
         catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+    );
+  }
+
+  if (trailEntries.length > 0) {
+    sections.push(
+      "THE DIRECTION I WAS MOVING:\n" +
+        trailEntries
+          .map((t) => {
+            const lines = [`- ${t.trajectory}`];
+            if (t.next_pull) lines.push(`  → ${t.next_pull}`);
+            return lines.join("\n");
+          })
+          .join("\n"),
     );
   }
 
@@ -465,6 +507,7 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
       stable: stableMemories.length,
       recent: recentMemories.length,
       catalysts: catalystMemories.length,
+      trail: trailEntries.length,
     },
   };
 }

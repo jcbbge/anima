@@ -150,9 +150,7 @@ const TOOLS = [
   {
     name: "anima_session_close",
     description:
-      "Record a session reflection in Anima. Captures subjective quality scores, emergence moments, " +
-      "friction, and notes. Writes to conversation_reflections table. " +
-      "Call at the end of a session to build the observability record over time.",
+      "Record a session reflection and navigation trail entry. Writes to conversation_reflections (quality scores, always) AND session_trail (trajectory, when trajectory is provided). Call at the end of every meaningful session.",
     inputSchema: {
       type: "object",
       properties: {
@@ -164,6 +162,26 @@ const TOOLS = [
         surprises: { type: "string", description: "What surprised you or Anima during the session?" },
         friction_notes: { type: "string", description: "Where did the system create friction or feel off?" },
         general_notes: { type: "string", description: "Any other observations worth capturing." },
+        trajectory: {
+          type: "string",
+          description: "First-person encounter narrative — what showed up and where it pulled. Encode encounters and motion, not tasks completed. Example: 'When I encountered X, I found myself following it toward Y. The question it opened: ...'",
+        },
+        warmth: {
+          type: "number",
+          description: "How alive this session felt at close. 1–5. Seeds the trail warmth decay (warmth - 0.1/day).",
+        },
+        next_pull: {
+          type: "string",
+          description: "Optional. What the breadcrumb points toward — direction, not a plan or todo.",
+        },
+        phi_sum: {
+          type: "number",
+          description: "Optional. Total phi accumulated this session (sum of stored memory phi values).",
+        },
+        emergence_moment: {
+          type: "string",
+          description: "Optional. If something broke through this session — the specific moment, first-person.",
+        },
       },
       required: [],
     },
@@ -301,11 +319,42 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
     },
   );
 
+  // Write session trail entry if trajectory provided
+  let trailId: string | null = null;
+  if (typeof args.trajectory === "string" && args.trajectory.trim()) {
+    const trailResult = await query<{ id: string }>(
+      `CREATE session_trail SET
+         conversation_id  = $conv,
+         trajectory       = $trajectory,
+         phi_sum          = $phi_sum,
+         key_memory_ids   = [],
+         emergence_moment = $emergence,
+         warmth           = $warmth,
+         next_pull        = $next_pull,
+         created_at       = time::now()`,
+      {
+        conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
+        trajectory: args.trajectory.trim(),
+        phi_sum: typeof args.phi_sum === "number" ? args.phi_sum : 0.0,
+        emergence: typeof args.emergence_moment === "string" ? args.emergence_moment : null,
+        warmth: typeof args.warmth === "number"
+          ? Math.min(5.0, Math.max(0.0, args.warmth))
+          : 3.0,
+        next_pull: typeof args.next_pull === "string" ? args.next_pull : null,
+      },
+    );
+    trailId = trailResult[0]?.id ?? null;
+  }
+
   return {
     recorded: true,
     context_quality: contextQuality,
     continuity_score: continuityScore,
-    message: "Session reflection recorded.",
+    trail_recorded: trailId !== null,
+    trail_id: trailId,
+    message: trailId
+      ? "Session reflection and trail entry recorded."
+      : "Session reflection recorded (no trajectory provided — trail entry skipped).",
   };
 }
 

@@ -275,3 +275,31 @@ DEFINE INDEX expressions_phi       ON expressions FIELDS readiness_phi;
 
 DEFINE FIELD related_curiosity ON memories TYPE option<record<curiosity_threads>>;
 DEFINE FIELD related_tension   ON memories TYPE option<record<tension_fields>>;
+
+
+-- =====================================================
+-- V2: Session trail — trajectory encoding, navigation layer
+-- Added 2026-03-16
+-- The horizontal axis: where attention has been moving.
+-- Encode encounters and warmth, not declarations and plans.
+-- Written by anima_session_close, read by anima_bootstrap.
+-- =====================================================
+
+DEFINE TABLE session_trail SCHEMAFULL;
+
+DEFINE FIELD conversation_id  ON session_trail TYPE option<string>;
+DEFINE FIELD trajectory       ON session_trail TYPE string ASSERT $value != '';
+DEFINE FIELD phi_sum          ON session_trail TYPE float DEFAULT 0.0
+  ASSERT $value >= 0.0;
+DEFINE FIELD key_memory_ids   ON session_trail TYPE array DEFAULT [];
+DEFINE FIELD emergence_moment ON session_trail TYPE option<string>;
+DEFINE FIELD warmth           ON session_trail TYPE float DEFAULT 3.0
+  ASSERT $value >= 0.0 AND $value <= 5.0;
+DEFINE FIELD next_pull        ON session_trail TYPE option<string>;
+DEFINE FIELD origin           ON session_trail TYPE option<object>;
+DEFINE FIELD created_at       ON session_trail TYPE datetime DEFAULT time::now();
+DEFINE FIELD followed_at      ON session_trail TYPE option<datetime>;
+
+DEFINE INDEX trail_conversation ON session_trail FIELDS conversation_id;
+DEFINE INDEX trail_warmth       ON session_trail FIELDS warmth;
+DEFINE INDEX trail_created      ON session_trail FIELDS created_at;

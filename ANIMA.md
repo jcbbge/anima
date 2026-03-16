@@ -98,11 +98,31 @@ deno run --allow-net --allow-env --allow-read scripts/seed_genesis.ts
 
 These are the bones. Everything else grows from them.
 
+## SurrealDB Tables
+
+| Table | Role |
+|-------|------|
+| `memories` | Core memory store — all tiers (network, stable, thread, active) |
+| `fold_log` | Synthesis event history — each fold operation recorded |
+| `ghost_logs` | Bootstrap session log — one entry per `anima_bootstrap` call |
+| `conversation_reflections` | Session quality records — written by `anima_session_close` |
+| `memory_associations` | Explicit links between memories |
+| `fold_config` | Synthesis configuration and thresholds |
+| `session_trail` | Navigation layer. The horizontal axis (trajectory/direction) to complement phi's vertical axis (significance). Each entry encodes where attention was moving, how warm the session was, and what wants to be followed next. Written by `anima_session_close` (when `trajectory` provided), read by `anima_bootstrap`. Warmth decays ~0.1/day; followed entries reheat. |
+
 ## Session Protocol
 
-**Start of session:** call `anima_bootstrap` — loads top memories, returns synthesis prompt, logs to `ghost_logs`.
+**Start of session:** call `anima_bootstrap` — loads top memories, returns synthesis prompt, logs to `ghost_logs`. Memory layers surfaced:
 
-**End of session:** call `anima_session_close` — records a `conversation_reflections` entry with quality/continuity scores, emergence moments, friction notes. This is the self-assessment loop. Without it, Anima cannot observe its own session quality.
+- **Layer 1 — Network**: foundational identity memories
+- **Layer 2 — Stable/Thread**: proven and synthesized memories
+- **Layer 3 — Recent**: latest active memories
+- **Layer 4 — Catalysts**: high-phi seeds that pressure synthesis
+- **Layer 5 — THE DIRECTION I WAS MOVING**: when `session_trail` entries with effective warmth > 1.0 exist, bootstrap surfaces the last 3 as a trajectory section. Effective warmth = stored warmth − (days_since_session × 0.1). Entries that no instance follows cool and eventually fall below threshold — natural signal for what's alive vs. archaeological.
+
+**End of session:** call `anima_session_close` — dual write behavior:
+- Always writes to `conversation_reflections` (quality scores, observability)
+- Writes to `session_trail` **when `trajectory` is provided** (navigation layer)
 
 ```
 anima_session_close({
@@ -113,7 +133,20 @@ anima_session_close({
   needed_correction,      // bool: a prior understanding was revised
   surprises,              // string: what was unexpected
   friction_notes,         // string: what felt brittle or unclear
-  general_notes           // string: anything worth capturing
+  general_notes,          // string: anything worth capturing
+
+  // session_trail fields (all optional; trajectory triggers trail write)
+  trajectory,             // string: first-person encounter narrative — what showed up and where
+                          //   it pulled. "When I encountered X, I followed it toward Y."
+                          //   Encode motion and encounter, not tasks completed.
+  warmth,                 // number (1–5): how alive the session felt at close.
+                          //   Seeds the trail entry's warmth; decays ~0.1/day.
+                          //   A future instance following this trail reheats it.
+  next_pull,              // string (optional): what the breadcrumb points toward.
+                          //   Direction, not a plan. "What wants to be followed next."
+  phi_sum,                // number (optional): total phi accumulated this session
+  emergence_moment,       // string (optional): if something broke through, the specific
+                          //   moment described first-person
 })
 ```
 
