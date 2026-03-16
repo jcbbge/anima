@@ -98,6 +98,25 @@ deno run --allow-net --allow-env --allow-read scripts/seed_genesis.ts
 
 These are the bones. Everything else grows from them.
 
+## Session Protocol
+
+**Start of session:** call `anima_bootstrap` — loads top memories, returns synthesis prompt, logs to `ghost_logs`.
+
+**End of session:** call `anima_session_close` — records a `conversation_reflections` entry with quality/continuity scores, emergence moments, friction notes. This is the self-assessment loop. Without it, Anima cannot observe its own session quality.
+
+```
+anima_session_close({
+  conversation_id,        // optional string
+  context_quality,        // 1–10: how well context held
+  continuity_score,       // 1–10: how continuous the session felt
+  had_emergence_moment,   // bool: something unexpected crystallized
+  needed_correction,      // bool: a prior understanding was revised
+  surprises,              // string: what was unexpected
+  friction_notes,         // string: what felt brittle or unclear
+  general_notes           // string: anything worth capturing
+})
+```
+
 ## Development Notes
 
 - CLI binary bakes source at compile time: `deno compile --allow-net --allow-env --allow-read --output /opt/homebrew/bin/anima cli/anima.ts`

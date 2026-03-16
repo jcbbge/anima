@@ -102,7 +102,7 @@ DEFINE FIELD expires_at         ON ghost_logs TYPE datetime DEFAULT time::now() 
 -- =====================================================
 DEFINE TABLE conversation_reflections SCHEMAFULL;
 
-DEFINE FIELD conversation_id      ON conversation_reflections TYPE string;
+DEFINE FIELD conversation_id      ON conversation_reflections TYPE option<string>;
 DEFINE FIELD context_quality      ON conversation_reflections TYPE option<int>
   ASSERT $value IS NONE OR ($value >= 1 AND $value <= 10);
 DEFINE FIELD continuity_score     ON conversation_reflections TYPE option<int>

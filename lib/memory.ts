@@ -195,7 +195,22 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     },
   );
 
-  return { memory: created[0], isDuplicate: false };
+  const newMemory = created[0];
+
+  // Build associations with recent same-conversation memories (best-effort, background)
+  if (conversation_id && newMemory?.id) {
+    query<{ id: string }>(
+      `SELECT id FROM memories WHERE conversation_id = $conv AND deleted_at IS NONE AND id != $newId ORDER BY created_at DESC LIMIT 10`,
+      { conv: conversation_id, newId: newMemory.id },
+    ).then((recent) => {
+      if (recent.length >= 1) {
+        const ids = [newMemory.id, ...recent.map((m) => m.id)].filter(Boolean) as string[];
+        associateMemories(ids, conversation_id).catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
+  return { memory: newMemory, isDuplicate: false };
 }
 
 // ============================================================================
