@@ -47,3 +47,7 @@ workspace/
 database/anima.db
 database/*.db
 history.txt
+
+# launchd plists (EnvironmentVariables dicts are a secrets vector — gitignore by default)
+*.plist
+!*.plist.template

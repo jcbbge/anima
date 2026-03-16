@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>anima.synthesis</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/deno</string>
+    <string>run</string>
+    <string>--allow-net</string>
+    <string>--allow-env</string>
+    <string>--allow-read</string>
+    <string>/Users/YOUR_USERNAME/anima/synthesis-worker/index.ts</string>
+  </array>
+
+  <!-- launchd restarts the worker if it exits for any reason -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Wait 10s before restarting on crash -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- Run at load (on login) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Logs -->
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/Library/Logs/anima-synthesis.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/Library/Logs/anima-synthesis.log</string>
+
+  <!--
+    EnvironmentVariables: localhost config ONLY.
+    API keys and external service credentials MUST NOT appear here.
+    They are loaded at runtime by index.ts from .env (gitignored).
+    See .env.example for required keys.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SURREAL_URL</key>
+    <string>ws://127.0.0.1:8002/rpc</string>
+    <key>SURREAL_USER</key>
+    <string>root</string>
+    <key>SURREAL_PASS</key>
+    <string>root</string>
+    <key>SURREAL_NS</key>
+    <string>anima</string>
+    <key>SURREAL_DB</key>
+    <string>memory</string>
+    <key>OLLAMA_URL</key>
+    <string>http://localhost:8001</string>
+    <key>OLLAMA_MODEL</key>
+    <string>nomic-embed-text</string>
+    <key>EMBEDDING_DIM</key>
+    <string>768</string>
+    <!-- OPENROUTER_API_KEY: loaded from .env by the worker — NOT here -->
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USERNAME/anima</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
