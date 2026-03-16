@@ -308,14 +308,14 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
        general_notes        = $general_notes,
        reflected_at         = time::now()`,
     {
-      conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
+      conv: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
       context_quality: contextQuality,
       continuity_score: continuityScore,
       had_emergence_moment: args.had_emergence_moment === true,
       needed_correction: args.needed_correction === true,
-      surprises: typeof args.surprises === "string" ? args.surprises : null,
-      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : null,
-      general_notes: typeof args.general_notes === "string" ? args.general_notes : null,
+      surprises: typeof args.surprises === "string" ? args.surprises : undefined,
+      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : undefined,
+      general_notes: typeof args.general_notes === "string" ? args.general_notes : undefined,
     },
   );
 
@@ -333,14 +333,14 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
          next_pull        = $next_pull,
          created_at       = time::now()`,
       {
-        conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
+        conv: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
         trajectory: args.trajectory.trim(),
         phi_sum: typeof args.phi_sum === "number" ? args.phi_sum : 0.0,
-        emergence: typeof args.emergence_moment === "string" ? args.emergence_moment : null,
+        emergence: typeof args.emergence_moment === "string" ? args.emergence_moment : undefined,
         warmth: typeof args.warmth === "number"
           ? Math.min(5.0, Math.max(0.0, args.warmth))
           : 3.0,
-        next_pull: typeof args.next_pull === "string" ? args.next_pull : null,
+        next_pull: typeof args.next_pull === "string" ? args.next_pull : undefined,
       },
     );
     trailId = trailResult[0]?.id ?? null;
