@@ -21,6 +21,7 @@ await loadEnv();
 
 import { addMemory, queryMemories, bootstrapMemories, getCatalysts, getStats } from "../lib/memory.ts";
 import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
+import { runDailyReport, type ReportOptions } from "../lib/daily.ts";
 import { closeDb, query } from "../lib/db.ts";
 import { describeSynthesisConfig } from "../lib/llm.ts";
 
@@ -317,6 +318,55 @@ async function cmdFoldLog(flags: Record<string, string | boolean>): Promise<void
     console.log("\n" + "─".repeat(60));
   }
 }
+async function cmdDaily(positional: string[], flags: Record<string, string | boolean>): Promise<void> {
+  // Help requested?
+  if (flags.help || positional.includes("-h")) {
+    console.log("Anima — Daily Diagnostics\n");
+    console.log("Usage:");
+    console.log("  anima daily                     Quick health check (default glance view)");
+    console.log("  anima daily --context           Add historical comparison & insights");
+    console.log("  anima daily --detail            Full inspection with sample records");
+    console.log("  anima daily 2026-03-14          Report for specific date (YYYY-MM-DD)");
+    console.log("  anima daily --anomalies         Show only problems/warnings");
+    console.log("  anima daily --health            Exit code only (0=healthy, 1=warning, 2=critical)");
+    console.log("  anima daily --json              Machine-readable JSON output");
+    console.log("  anima daily --no-color          Disable colors (for piping)");
+    console.log();
+    console.log("The Three Tiers:");
+    console.log("  • Glance (default) — 3-second health assessment with visual dashboard");
+    console.log("  • Context (--context) — Understand patterns vs 7-day averages");
+    console.log("  • Detail (--detail) — Inspect individual records when investigating");
+    console.log();
+    console.log("Examples:");
+    console.log("  anima daily                     # Morning health check");
+    console.log("  anima daily --anomalies         # Just tell me what's wrong");
+    console.log("  anima daily --context           # How does today compare to normal?");
+    console.log();
+    console.log("Reports saved to: workspace/reports/YYYY-MM-DD.json");
+    return;
+  }
+  // Parse options
+  const dateArg = positional[0];
+  const options: ReportOptions = {
+    dateArg: dateArg && /^\d{4}-\d{2}-\d{2}$/.test(dateArg) ? dateArg : undefined,
+    showContext: !!flags.context,
+    showDetail: !!flags.detail,
+    anomaliesOnly: !!flags.anomalies,
+    healthCheck: !!flags.health,
+    jsonMode: !!flags.json,
+    noColor: !!flags["no-color"],
+  };
+
+  // Run report
+  const { output, exitCode } = await runDailyReport(options);
+  console.log(output);
+
+  if (exitCode !== 0) {
+    Deno.exit(exitCode);
+  }
+}
+
+
 
 async function cmdWorker(subcommand: string): Promise<void> {
   const LABEL = "anima.synthesis";
@@ -393,6 +443,10 @@ function cmdHelp(): void {
   console.log("  anima reflect                   Fold session — synthesize active memories");
   console.log("  anima reflect --conv ID         Fold scoped to a conversation ID");
   console.log("  anima stats                     System state — counts, phi, fold history");
+  console.log("  anima daily                     Daily health report (glance view)");
+  console.log("  anima daily --context           With contextual insights");
+  console.log("  anima daily --detail            Full inspection with records");
+  console.log("  anima daily 2026-03-14          Report for specific date");
   console.log("  anima worker [status]           Check synthesis worker status");
   console.log("  anima worker start|stop|restart Control synthesis worker");
   console.log("  anima worker logs               Tail synthesis worker logs");
@@ -427,6 +481,9 @@ try {
       break;
     case "stats":
       await cmdStats();
+      break;
+    case "daily":
+      await cmdDaily(positional, flags);
       break;
     case "worker":
       await cmdWorker(positional[0] ?? "status");
