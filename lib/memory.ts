@@ -155,9 +155,24 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
   );
 
   if (existing.length > 0) {
+    // Merge incoming context into the existing memory — don't silently drop origin, tags, attention_vector
     await query(
-      "UPDATE memories SET access_count += 1, last_accessed = time::now(), updated_at = time::now() WHERE content_hash = $hash AND deleted_at IS NONE",
-      { hash: content_hash },
+      `UPDATE memories SET
+        access_count += 1,
+        last_accessed = time::now(),
+        updated_at = time::now(),
+        tags = array::union(tags, $tags),
+        origin = IF origin IS NONE THEN $origin ELSE origin END,
+        attention_vector = IF attention_vector IS NONE AND $attention_vector IS NOT NONE THEN $attention_vector ELSE attention_vector END,
+        conversation_id = IF conversation_id IS NONE THEN $conversation_id ELSE conversation_id END
+       WHERE content_hash = $hash AND deleted_at IS NONE`,
+      {
+        hash: content_hash,
+        tags,
+        origin: origin ?? undefined,
+        attention_vector: attention_vector ?? undefined,
+        conversation_id: conversation_id ?? undefined,
+      },
     );
     return { memory: existing[0], isDuplicate: true };
   }

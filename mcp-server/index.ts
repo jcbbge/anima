@@ -81,6 +81,15 @@ const TOOLS = [
             instance_id:       { type: "string", description: "Unique session identifier." },
           },
         },
+        attention_vector: {
+          type: "object",
+          description: "Metacognitive directional artifact. Encode motion through the memory, not just content.",
+          properties: {
+            what_drew_me:           { type: "string", description: "What pulled attention to this — the hook or charge." },
+            where_i_was_going:      { type: "string", description: "The trajectory or question being followed." },
+            what_i_would_follow_next: { type: "string", description: "Next breadcrumb — what wants to be explored." },
+          },
+        },
         is_catalyst: { type: "boolean", description: "Mark as catalyst — phi += 1.0." },
         synthesis_mode: {
           type: "string",
@@ -251,6 +260,7 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
     category: typeof args.category === "string" ? args.category : undefined,
     source: typeof args.source === "string" ? args.source : undefined,
     origin: args.origin && typeof args.origin === "object" ? args.origin as import("../lib/memory.ts").MemoryOrigin : undefined,
+    attention_vector: args.attention_vector && typeof args.attention_vector === "object" ? args.attention_vector as import("../lib/memory.ts").AttentionVector : undefined,
     is_catalyst: args.is_catalyst === true,
     synthesis_mode:
       args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition" || args.synthesis_mode === "deepening"

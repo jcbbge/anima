@@ -1,14 +1,15 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:surrealdb@2.0.0-beta.2": "2.0.0-beta.2_tslib@2.8.1_typescript@5.9.3"
+    "npm:surrealdb@*": "2.0.2_tslib@2.8.1_typescript@5.9.3",
+    "npm:surrealdb@2.0.2": "2.0.2_tslib@2.8.1_typescript@5.9.3"
   },
   "npm": {
     "@surrealdb/cbor@2.0.0-alpha.4": {
       "integrity": "sha512-l/hNZ3ZCOJq8rzwx1y5ZV/8b2bYCWdhGqRVY33Pu50NAHyAW5qLsMn3ZBkZow77mAKwNCsbDsRGnyYEuU95mjw=="
     },
-    "surrealdb@2.0.0-beta.2_tslib@2.8.1_typescript@5.9.3": {
-      "integrity": "sha512-0LrBP1U15E+Q7aXaGAf1GQMDOkZ5ETaSpeiLhsmcK0KyNb9rcS8fPHd5dZcMeBGWfM+f9G4Tu+sPBSNhuRNJKA==",
+    "surrealdb@2.0.2_tslib@2.8.1_typescript@5.9.3": {
+      "integrity": "sha512-yKd4atWe1HdJEdACQhC8tsOSJxyxYs5/CqHoxweia4y8R8j8zP5aMzYeAx+lR/ZzhF29W276cxu/PbK1QDsWVA==",
       "dependencies": [
         "@surrealdb/cbor",
         "tslib",
@@ -114,7 +115,7 @@
   },
   "workspace": {
     "dependencies": [
-      "npm:surrealdb@2.0.0-beta.2"
+      "npm:surrealdb@2.0.2"
     ]
   }
 }
