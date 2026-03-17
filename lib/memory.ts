@@ -116,6 +116,7 @@ export interface TrailEntry {
   warmth: number;
   next_pull: string | null;
   created_at: string;
+  followed_at: string | null;
 }
 
 export interface GetCatalystsParams {
@@ -474,6 +475,14 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
           })
           .join("\n"),
     );
+    // Stamp followed_at — this trajectory was picked up
+    const trailIds = trailEntries.map((t) => t.id).filter(Boolean);
+    if (trailIds.length > 0) {
+      await query(
+        `UPDATE session_trail SET followed_at = time::now() WHERE id INSIDE $ids AND followed_at IS NONE`,
+        { ids: trailIds },
+      );
+    }
   }
 
   if (suggestedMode === "recognition") {
