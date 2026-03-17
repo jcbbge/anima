@@ -44,6 +44,7 @@ export interface Memory {
   access_count: number;
   last_accessed: string;
   session_ids: string[];
+  last_folded_at: string | null;
   category: string | null;
   tags: string[];
   source: string | null;
@@ -292,7 +293,9 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
   }
 
   // Track co-occurrence for all surfaced memories (best-effort, background)
-  if (memories.length >= 2) {
+  // Only associate when conversation_id is present — contextless queries are retrievals,
+  // not episodic encounters. Without context, associations have no provenance.
+  if (conversation_id && memories.length >= 2) {
     const ids = memories.map((m) => m.id).filter(Boolean) as string[];
     associateMemories(ids, conversation_id).catch(() => {});
   }
