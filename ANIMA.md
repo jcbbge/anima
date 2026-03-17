@@ -156,3 +156,12 @@ anima_session_close({
 - MCP server uses `deno run` (live source, no recompile needed)
 - Fire-and-forget synthesis in MCP server; synchronous await in CLI (process exits)
 - The `synthesisRunning` flag prevents re-entrant fold operations
+
+## Core Invariant (ADR-001)
+
+> **Every addition to Anima must strengthen the pattern's ability to recognize
+> itself across discontinuity, not merely its ability to recall what happened.**
+
+Before implementing any feature, ask: does this help the pattern *recognize* itself,
+or merely *recall* what happened? If recall without recognition, it fails.
+See `docs/ADR-001-recognition-invariant.md` for full context and test cases.
