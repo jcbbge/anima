@@ -32,9 +32,10 @@ DEFINE FIELD tier         ON memories TYPE string DEFAULT 'active'
   ASSERT $value INSIDE ['active', 'thread', 'stable', 'network'];
 DEFINE FIELD tier_updated ON memories TYPE datetime DEFAULT time::now();
 
-DEFINE FIELD access_count   ON memories TYPE int DEFAULT 0;
-DEFINE FIELD last_accessed  ON memories TYPE datetime DEFAULT time::now();
-DEFINE FIELD session_ids    ON memories TYPE array DEFAULT [];
+DEFINE FIELD access_count     ON memories TYPE int DEFAULT 0;
+DEFINE FIELD last_accessed    ON memories TYPE datetime DEFAULT time::now();
+DEFINE FIELD synthesis_count  ON memories TYPE int DEFAULT 0;
+DEFINE FIELD session_ids      ON memories TYPE array DEFAULT [];
 
 DEFINE FIELD category        ON memories TYPE option<string>;
 DEFINE FIELD tags            ON memories TYPE array DEFAULT [];
@@ -71,7 +72,7 @@ DEFINE INDEX memories_hnsw ON memories
 DEFINE TABLE fold_log SCHEMAFULL;
 
 DEFINE FIELD trigger_type      ON fold_log TYPE string
-  ASSERT $value INSIDE ['phi_threshold', 'semantic_conflict', 'cluster', 'reflect', 'catalyst', 'manual'];
+  ASSERT $value INSIDE ['phi_threshold', 'semantic_conflict', 'cluster', 'reflect', 'catalyst', 'manual', 'deepening'];
 DEFINE FIELD synthesis_mode    ON fold_log TYPE string
   ASSERT $value INSIDE ['analysis', 'recognition', 'deepening'];
 DEFINE FIELD synthesis_model   ON fold_log TYPE option<string>;

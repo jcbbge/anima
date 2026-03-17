@@ -104,10 +104,25 @@ export interface BootstrapResult {
   memoryCounts: {
     network: number;
     stable: number;
+    thread: number;
     recent: number;
     catalysts: number;
     trail: number;
   };
+}
+
+interface FoldLineage {
+  input_memory_ids: string[];
+  phi_before: number;
+  phi_after: number;
+  synthesis_mode: string | null;
+  created_at: string;
+}
+
+interface ThreadMemoryWithLineage extends Memory {
+  _bootstrapScore: number;
+  _foldLineage: FoldLineage | null;
+  _parentMemories: Array<{ id: string; content: string; phi: number; tier: string }>;
 }
 
 export interface TrailEntry {
@@ -349,32 +364,73 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
-  // Layer 3: ACTIVE + THREAD — top 5 by recency × phi × confidence
+  // Layer 3: ACTIVE + THREAD — top candidates by recency × phi × confidence
   // score = (phi * 0.4) + (recency_decay * 0.4) + (confidence * 0.2)
   // recency_decay = max(0, 1 - (days_since_access / 7))
+  // Thread-tier (synthesized) memories are more constitutive of identity — surface them first.
   // SurrealDB: compute recency in app layer — fetch candidates, score here
   const recentCandidates = await query<Memory>(
     `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed, synthesis_mode
      FROM memories
      WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
      ORDER BY last_accessed DESC
-     LIMIT 20`,
+     LIMIT 30`,
     {},
   );
 
   const now = Date.now();
-  const recentMemories = recentCandidates
-    .map((m) => {
-      const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
-      const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
-      const recencyDecay = Math.max(0, 1 - daysSince / 7);
-      const phi = m.resonance_phi ?? 1.0;
-      const conf = m.confidence ?? 0.6;
-      const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
-      return { ...m, _bootstrapScore: score };
-    })
+  const scoredCandidates = recentCandidates.map((m) => {
+    const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
+    const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
+    const recencyDecay = Math.max(0, 1 - daysSince / 7);
+    const phi = m.resonance_phi ?? 1.0;
+    const conf = m.confidence ?? 0.6;
+    const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
+    return { ...m, _bootstrapScore: score };
+  });
+
+  // Separate thread-tier (synthesized) from active-tier, each sorted by score
+  const threadCandidates = scoredCandidates
+    .filter((m) => m.tier === "thread")
     .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
     .slice(0, 5);
+
+  const activeCandidates = scoredCandidates
+    .filter((m) => m.tier === "active")
+    .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
+    .slice(0, 5);
+
+  // For each thread-tier memory, load fold lineage from fold_log and parent memory content
+  const threadMemoriesWithLineage: ThreadMemoryWithLineage[] = await Promise.all(
+    threadCandidates.map(async (m) => {
+      if (!m.id) {
+        return { ...m, _foldLineage: null, _parentMemories: [] } as ThreadMemoryWithLineage;
+      }
+      const foldRows = await query<FoldLineage>(
+        `SELECT input_memory_ids, phi_before, phi_after, synthesis_mode, created_at
+         FROM fold_log
+         WHERE output_memory_id = $id
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        { id: m.id },
+      );
+      const fold = foldRows[0] ?? null;
+      let parentMemories: Array<{ id: string; content: string; phi: number; tier: string }> = [];
+      if (fold && fold.input_memory_ids && fold.input_memory_ids.length > 0) {
+        parentMemories = await query<{ id: string; content: string; phi: number; tier: string }>(
+          `SELECT id, content, resonance_phi AS phi, tier
+           FROM memories
+           WHERE id INSIDE $ids AND deleted_at IS NONE
+           LIMIT 3`,
+          { ids: fold.input_memory_ids },
+        );
+      }
+      return { ...m, _foldLineage: fold, _parentMemories: parentMemories } as ThreadMemoryWithLineage;
+    }),
+  );
+
+  // Combined recentMemories for access-count bumping (both tiers)
+  const recentMemories = [...threadCandidates, ...activeCandidates];
 
   // Layer 4: CATALYSTS — top 3 by phi DESC where is_catalyst = true
   // "This is what broke through. Surface first."
@@ -438,13 +494,13 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     .filter((t) => t.effectiveWarmth > 1.0)
     .slice(0, 3);
 
-  // Detect operating mode from recent memories
+  // Detect operating mode from recent active memories (raw experience signals)
   const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
-  const recognitionCount = recentMemories.filter((m) =>
+  const recognitionCount = activeCandidates.filter((m) =>
     m.synthesis_mode === "recognition" ||
     (m.tags ?? []).some((t) => recognitionSignalTags.has(t))
   ).length;
-  const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
+  const suggestedMode = recognitionCount > activeCandidates.length / 2 ? "recognition" : "analysis";
 
   // Synthesize into first-person continuity prompt (PRD §11, step 5)
   const sections: string[] = [];
@@ -463,10 +519,26 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
-  if (recentMemories.length > 0) {
+  if (threadMemoriesWithLineage.length > 0) {
+    const threadLines = threadMemoriesWithLineage.map((m) => {
+      const phi = (m.resonance_phi ?? 0).toFixed(1);
+      const mode = m._foldLineage?.synthesis_mode ?? m.synthesis_mode ?? "synthesis";
+      const parentCount = m._foldLineage?.input_memory_ids?.length ?? 0;
+      const header = `**${m.content}** (φ${phi} — folded from ${parentCount} memor${parentCount === 1 ? "y" : "ies"}, ${mode})`;
+      if (m._parentMemories.length === 0) return `- ${header}`;
+      const sourceLines = m._parentMemories
+        .slice(0, 3)
+        .map((p) => `    ↳ ${p.content.slice(0, 120)}${p.content.length > 120 ? "…" : ""}`)
+        .join("\n");
+      return `- ${header}\n${sourceLines}`;
+    }).join("\n");
+    sections.push("## Synthesized Understanding\n" + threadLines);
+  }
+
+  if (activeCandidates.length > 0) {
     sections.push(
-      "WHAT I WAS WORKING WITH RECENTLY:\n" +
-        recentMemories.map((m) => `- ${m.content}`).join("\n"),
+      "## Recent Experience\n" +
+        activeCandidates.map((m) => `- ${m.content}`).join("\n"),
     );
   }
 
@@ -500,15 +572,14 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  const topTrail = trailEntries[0] ?? null;
+
   if (trailEntries.length > 0) {
+    // Render trajectory lines but strip next_pull from narrative — it becomes a directive below
     sections.push(
       "THE DIRECTION I WAS MOVING:\n" +
         trailEntries
-          .map((t) => {
-            const lines = [`- ${t.trajectory}`];
-            if (t.next_pull) lines.push(`  → ${t.next_pull}`);
-            return lines.join("\n");
-          })
+          .map((t) => `- ${t.trajectory}`)
           .join("\n"),
     );
     // Stamp followed_at — this trajectory was picked up
@@ -530,8 +601,15 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  // Final section: behavioral directive sourced from next_pull — must be last
+  if (topTrail?.next_pull) {
+    sections.push(
+      `## Your First Move\n\nYour first move this session: ${topTrail.next_pull}\n\nBegin there. Everything else is context.`,
+    );
+  }
+
   const promptText = sections.length > 0
-    ? sections.join("\n\n") + "\n\nContinue."
+    ? sections.join("\n\n")
     : "No memories loaded. This is a fresh start.";
 
   // Log to ghost_logs — schema fields: prompt_text, top_phi_memory_ids, top_phi_values, conversation_id
@@ -586,7 +664,8 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     memoryCounts: {
       network: networkMemories.length,
       stable: stableMemories.length,
-      recent: recentMemories.length,
+      thread: threadMemoriesWithLineage.length,
+      recent: activeCandidates.length,
       catalysts: catalystMemories.length,
       trail: trailEntries.length,
     },

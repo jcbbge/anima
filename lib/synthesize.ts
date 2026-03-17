@@ -41,6 +41,10 @@ const CLUSTER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const FOLD_MIN_MEMORIES = 3;        // Don't fold if fewer than this
 const LLM_TIMEOUT_MS = 30_000;      // qwen is fast but give it room
 
+// Deepening trigger thresholds
+const DEEPENING_THREAD_ACCESS_MIN = 3;     // Thread-tier memory min access_count to be an anchor
+const DEEPENING_ASSOCIATION_THRESHOLD = 0.3; // Min cosine similarity for active memories to count as "new signal"
+
 // Guard against concurrent synthesis calls
 let synthesisRunning = false;
 
@@ -105,6 +109,61 @@ async function checkClusterPressure(
 
   const close = rows.filter((r) => r.similarity >= 0.75);
   return { triggered: close.length >= CLUSTER_SIZE, count: close.length };
+}
+
+interface DeepeningResult {
+  triggered: boolean;
+  anchorMemory?: Partial<Memory>;
+  relatedActive?: Partial<Memory>[];
+}
+
+async function checkDeepeningPressure(
+  newEmbedding: number[],
+): Promise<DeepeningResult> {
+  if (!newEmbedding?.length) return { triggered: false };
+
+  // Find thread-tier memories that have been returned to frequently
+  const threadCandidates = await query<Memory>(
+    `SELECT id, content, resonance_phi, confidence, tier, tags, embedding, access_count, created_at
+     FROM memories
+     WHERE tier = 'thread'
+       AND access_count >= $min_access
+       AND deleted_at IS NONE
+     ORDER BY access_count DESC
+     LIMIT 5`,
+    { min_access: DEEPENING_THREAD_ACCESS_MIN },
+  );
+
+  if (threadCandidates.length === 0) return { triggered: false };
+
+  // For each thread candidate, check if there are active-tier memories
+  // semantically related to it (new experience accumulating around an existing synthesis)
+  const activeMemories = await query<Memory & { similarity: number }>(
+    `SELECT id, content, resonance_phi, confidence, tier, tags, created_at,
+            vector::similarity::cosine(embedding, $vec) AS similarity
+     FROM memories
+     WHERE tier = 'active'
+       AND embedding IS NOT NONE
+       AND deleted_at IS NONE
+     ORDER BY similarity DESC
+     LIMIT 20`,
+    { vec: newEmbedding },
+  );
+
+  const relevantActive = activeMemories.filter(
+    (m) => (m.similarity ?? 0) >= DEEPENING_ASSOCIATION_THRESHOLD,
+  );
+
+  if (relevantActive.length === 0) return { triggered: false };
+
+  // Pick the thread-tier anchor with the highest access count
+  const anchor = threadCandidates[0];
+
+  return {
+    triggered: true,
+    anchorMemory: anchor,
+    relatedActive: relevantActive,
+  };
 }
 
 // ============================================================================
@@ -395,12 +454,34 @@ export async function performFold(params: FoldParams): Promise<void> {
     },
   );
 
-  // Promote source memories: active → thread (they've been integrated)
+  // Increment synthesis_count on all input memories — they contributed to a successful fold
+  if (inputIds.length > 0) {
+    await query(
+      `UPDATE memories SET
+         synthesis_count = synthesis_count + 1,
+         updated_at = time::now()
+       WHERE id INSIDE $ids`,
+      { ids: inputIds },
+    );
+  }
+
+  // Tier promotion based on synthesis involvement (not access frequency)
+  // active → stable: synthesis_count >= 2
+  // stable → thread:  synthesis_count >= 5 OR output phi is high (phi_after >= 4.0)
+  // Deepening folds do not promote — they are refinement, not integration of active memories
   if (trigger !== "deepening" && inputIds.length > 0) {
     await query(
       `UPDATE memories SET
-         tier = IF tier = 'active' THEN 'thread' ELSE tier END,
-         tier_updated = time::now(),
+         tier = IF tier = 'active' AND synthesis_count >= 2 THEN 'stable'
+                ELSE IF tier = 'stable' AND (synthesis_count >= 5 OR resonance_phi >= 4.0) THEN 'thread'
+                ELSE tier
+                END,
+         tier_updated = IF
+           (tier = 'active' AND synthesis_count >= 2) OR
+           (tier = 'stable' AND (synthesis_count >= 5 OR resonance_phi >= 4.0))
+           THEN time::now()
+           ELSE tier_updated
+           END,
          updated_at = time::now()
        WHERE id INSIDE $ids`,
       { ids: inputIds },
@@ -447,16 +528,17 @@ export async function checkAndSynthesize(
   synthesisRunning = true;
   try {
     // Run pressure checks (parallel where independent)
-    const [phiResult, clusterResult] = await Promise.all([
+    const [phiResult, clusterResult, deepeningResult] = await Promise.all([
       checkPhiPressure(),
       newEmbedding ? checkClusterPressure(newEmbedding) : Promise.resolve({ triggered: false, count: 0 }),
+      newEmbedding ? checkDeepeningPressure(newEmbedding) : Promise.resolve<DeepeningResult>({ triggered: false }),
     ]);
 
     const conflictResult = newEmbedding
       ? await checkConflictPressure(newEmbedding, newMemoryId)
       : { triggered: false };
 
-    // Determine which trigger fires (priority: phi > conflict > cluster)
+    // Determine which trigger fires (priority: phi > conflict > cluster > deepening)
     let trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "deepening" | null = null;
 
     if (phiResult.triggered) {
@@ -468,6 +550,9 @@ export async function checkAndSynthesize(
     } else if (clusterResult.triggered) {
       trigger = "cluster";
       console.error(`[anima:fold] Cluster emerged (${clusterResult.count} related memories)`);
+    } else if (deepeningResult.triggered) {
+      trigger = "deepening";
+      console.error(`[anima:fold] Deepening triggered — thread-tier anchor with new active signal`);
     }
 
     if (!trigger) return;
@@ -508,6 +593,12 @@ export async function checkAndSynthesize(
          ORDER BY resonance_phi DESC`,
         { vec: newEmbedding!, window: windowStart },
       );
+    } else if (trigger === "deepening") {
+      // Anchor (thread-tier memory being returned to) + related active memories as new signal
+      const anchor = deepeningResult.anchorMemory!;
+      const relatedActive = deepeningResult.relatedActive ?? [];
+      // Anchor first so performFold / LLM sees it as the existing synthesis
+      memories = [anchor, ...relatedActive];
     }
 
     await performFold({ trigger, memories, conversationId });
