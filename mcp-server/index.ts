@@ -22,7 +22,7 @@ import {
   getStats,
   associateMemories,
 } from "../lib/memory.ts";
-import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
+import { reflectAndSynthesize } from "../lib/synthesize.ts";
 import { query } from "../lib/db.ts";
 
 // ============================================================================
@@ -241,18 +241,6 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
         : undefined,
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   });
-
-  if (!result.isDuplicate) {
-    Promise.resolve().then(() =>
-      checkAndSynthesize(
-        result.memory.id as string,
-        null,
-        typeof args.conversation_id === "string" ? args.conversation_id : undefined,
-      ).catch((err) =>
-        console.error(`[anima:fold] Background check failed: ${(err as Error).message}`)
-      )
-    );
-  }
 
   return {
     id: result.memory.id,

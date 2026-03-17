@@ -340,8 +340,8 @@ DEFINE FUNCTION IF NOT EXISTS fn::active_phi_total() -> float {
 };
 
 -- Returns true when active phi exceeds the given threshold.
-DEFINE FUNCTION IF NOT EXISTS fn::synthesis_pressure_exceeded(threshold: float) -> bool {
-  RETURN fn::active_phi_total() > threshold;
+DEFINE FUNCTION IF NOT EXISTS fn::synthesis_pressure_exceeded($threshold: float) -> bool {
+  RETURN fn::active_phi_total() > $threshold;
 };
 
 
@@ -358,11 +358,13 @@ DEFINE EVENT IF NOT EXISTS phi_watermark ON TABLE memories
   THEN {
     LET $total = fn::active_phi_total();
     IF $total > 15.0 {
-      UPDATE fold_config SET value = string::concat('pending:', string($total)), updated_at = time::now()
+      UPDATE fold_config SET
+        value = string::concat('pending:', type::string($total)),
+        updated_at = time::now()
         WHERE key = 'pending_synthesis' AND (
           value IS NONE OR
           value = 'idle' OR
-          NOT string::starts_with(value, 'pending:')
+          string::starts_with(value, 'pending:') = false
         );
     };
   };
@@ -407,7 +409,7 @@ DEFINE EVENT IF NOT EXISTS tier_promote ON TABLE memories
 -- SurrealDB recomputes this view incrementally on changes.
 -- =====================================================
 
-DEFINE TABLE IF NOT EXISTS phi_summary OVERWRITE
+DEFINE TABLE IF NOT EXISTS phi_summary
   AS SELECT
     math::sum(resonance_phi) AS total_phi,
     count() AS active_memory_count

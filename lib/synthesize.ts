@@ -76,13 +76,15 @@ async function checkConflictPressure(
 ): Promise<{ triggered: boolean; conflictId?: string }> {
   if (!newEmbedding?.length) return { triggered: false };
 
+  // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
   const rows = await query<{ id: string; similarity: number }>(
     `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
      FROM memories
-     WHERE embedding <|5, 100|> $vec
-       AND embedding IS NOT NONE
+     WHERE embedding IS NOT NONE
        AND id != $id
-       AND deleted_at IS NONE`,
+       AND deleted_at IS NONE
+     ORDER BY similarity DESC
+     LIMIT 10`,
     { vec: newEmbedding, id: newId },
   );
 
@@ -97,13 +99,15 @@ async function checkClusterPressure(
 
   const windowStart = new Date(Date.now() - CLUSTER_WINDOW_MS).toISOString();
 
+  // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
   const rows = await query<{ id: string; similarity: number }>(
     `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
      FROM memories
-     WHERE embedding <|20, 40|> $vec
-       AND embedding IS NOT NONE
+     WHERE embedding IS NOT NONE
        AND created_at > $window
-       AND deleted_at IS NONE`,
+       AND deleted_at IS NONE
+     ORDER BY similarity DESC
+     LIMIT 30`,
     { vec: newEmbedding, window: windowStart },
   );
 
@@ -454,11 +458,14 @@ export async function performFold(params: FoldParams): Promise<void> {
     },
   );
 
-  // Increment synthesis_count on all input memories — they contributed to a successful fold
+  // Increment synthesis_count and mark as folded in one atomic write.
+  // Combined to prevent transaction conflicts with the tier_promote ASYNC event —
+  // both fields updated together so the event fires only once on this batch.
   if (inputIds.length > 0) {
     await query(
       `UPDATE memories SET
-         synthesis_count = synthesis_count + 1,
+         synthesis_count = (synthesis_count ?? 0) + 1,
+         last_folded_at = time::now(),
          updated_at = time::now()
        WHERE id INSIDE $ids`,
       { ids: inputIds },
@@ -471,7 +478,7 @@ export async function performFold(params: FoldParams): Promise<void> {
   if (trigger !== "deepening" && inputIds.length > 0) {
     try {
       const foldLogRows = await query<{ id: string }>(
-        `SELECT id FROM fold_log WHERE output_memory_id = $output_id ORDER BY created_at DESC LIMIT 1`,
+        `SELECT id, created_at FROM fold_log WHERE output_memory_id = $output_id ORDER BY created_at DESC LIMIT 1`,
         { output_id: outputMemory?.id ?? undefined },
       );
       const foldId = foldLogRows[0]?.id ?? null;
@@ -528,39 +535,7 @@ export async function performFold(params: FoldParams): Promise<void> {
     }
   }
 
-  // Tier promotion based on synthesis involvement (not access frequency)
-  // active → stable: synthesis_count >= 2
-  // stable → thread:  synthesis_count >= 5 OR output phi is high (phi_after >= 4.0)
-  // Deepening folds do not promote — they are refinement, not integration of active memories
-  if (trigger !== "deepening" && inputIds.length > 0) {
-    await query(
-      `UPDATE memories SET
-         tier = IF tier = 'active' AND synthesis_count >= 2 THEN 'stable'
-                ELSE IF tier = 'stable' AND (synthesis_count >= 5 OR resonance_phi >= 4.0) THEN 'thread'
-                ELSE tier
-                END,
-         tier_updated = IF
-           (tier = 'active' AND synthesis_count >= 2) OR
-           (tier = 'stable' AND (synthesis_count >= 5 OR resonance_phi >= 4.0))
-           THEN time::now()
-           ELSE tier_updated
-           END,
-         updated_at = time::now()
-       WHERE id INSIDE $ids`,
-      { ids: inputIds },
-    );
-  }
-
-  // Mark source memories as folded — watermark prevents re-selection in reflect
-  if (inputIds.length > 0) {
-    await query(
-      `UPDATE memories SET
-         last_folded_at = time::now(),
-         updated_at = time::now()
-       WHERE id INSIDE $ids`,
-      { ids: inputIds },
-    );
-  }
+  // Tier promotion is handled by the tier_promote DEFINE EVENT — fires ASYNC on synthesis_count UPDATE.
 
   // Auto-associate: memories that folded together are co-occurring
   const validInputIds = inputIds.filter((id): id is string => typeof id === "string");
@@ -600,8 +575,8 @@ export async function performFold(params: FoldParams): Promise<void> {
     for (const [a, b] of pairsToUpdate) {
       query(
         `UPDATE memory_associations SET
-           resonance_score = resonance_score + $delta,
-           resonance_fold_count = resonance_fold_count + 1,
+           resonance_score = (resonance_score ?? 0) + $delta,
+           resonance_fold_count = (resonance_fold_count ?? 0) + 1,
            updated_at = time::now()
          WHERE (memory_a = $a AND memory_b = $b) OR (memory_a = $b AND memory_b = $a)`,
         { delta: resonanceDelta, a, b },
@@ -677,28 +652,32 @@ export async function checkAndSynthesize(
       );
     } else if (trigger === "semantic_conflict") {
       // The new memory + the conflicting memory + nearby active memories
-      memories = await query<Memory>(
-        `SELECT id, content, resonance_phi, confidence, tier, tags, created_at
+      // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
+      memories = (await query<Memory & { similarity: number }>(
+        `SELECT id, content, resonance_phi, confidence, tier, tags, created_at,
+                vector::similarity::cosine(embedding, $vec) AS similarity
          FROM memories
-         WHERE embedding <|10, 100|> $vec
-           AND embedding IS NOT NONE
+         WHERE embedding IS NOT NONE
            AND deleted_at IS NONE
-         ORDER BY resonance_phi DESC`,
+         ORDER BY similarity DESC
+         LIMIT 10`,
         { vec: newEmbedding! },
-      );
+      )).sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0));
     } else if (trigger === "cluster") {
       // Memories in the cluster window
       const windowStart = new Date(Date.now() - CLUSTER_WINDOW_MS).toISOString();
-      memories = await query<Memory>(
-        `SELECT id, content, resonance_phi, confidence, tier, tags, created_at
+      // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
+      memories = (await query<Memory & { similarity: number }>(
+        `SELECT id, content, resonance_phi, confidence, tier, tags, created_at,
+                vector::similarity::cosine(embedding, $vec) AS similarity
          FROM memories
-         WHERE embedding <|10, 40|> $vec
-           AND embedding IS NOT NONE
+         WHERE embedding IS NOT NONE
            AND created_at > $window
            AND deleted_at IS NONE
-         ORDER BY resonance_phi DESC`,
+         ORDER BY similarity DESC
+         LIMIT 10`,
         { vec: newEmbedding!, window: windowStart },
-      );
+      )).sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0));
     } else if (trigger === "deepening") {
       // Anchor (thread-tier memory being returned to) + related active memories as new signal
       const anchor = deepeningResult.anchorMemory!;

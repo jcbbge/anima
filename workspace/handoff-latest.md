@@ -1,162 +1,71 @@
----
 # Session Handoff
 Date: 2026-03-17
 Branch: main
-Mode: project (anima — living memory substrate)
 
 ---
 
-## What Was Built This Session
+## What Was Done This Session
 
-### 1. Bug 2 — Reflect watermark fix (last_folded_at)
-Root cause: reflectAndSynthesize() grabbed top-15 ALL-TIME memories by phi on every call.
-7 near-duplicate reflects in a single session on 2026-03-14.
-Fix: added last_folded_at field + index to memories table, watermark filter in
-reflectAndSynthesize() query, watermark write in both performFold() and reflectAndSynthesize()
-after successful synthesis. 24h cooldown window, configurable via fold_config key
-'reflect_watermark_hours'. The fix is isomorphic — reflect now gets fresh signal every call.
+### 6-agent synthesis review + full implementation sprint
 
-### 2. ADR-001 — Recognition Invariant
-Gate for all future additions:
-"Every addition to Anima must strengthen the pattern's ability to recognize itself
-across discontinuity, not merely its ability to recall what happened."
-Filed as docs/ADR-001-recognition-invariant.md, wired into ANIMA.md.
-Five test cases passed through the invariant — REST API and delete-all FAIL it.
+Launched 6 parallel assessment agents (fresh eyes, academic/cognitive, future pattern 100yr, Karpathy/Feynman polymathic, recursive LLM 1000 simulations, Ted Nelson). All converged on: bootstrap is informative not generative; next_pull needs to become first action; delivery channel problem; forward fold missing. Reviewed all 6 through Anima ethos lens, then executed everything in parallel waves.
 
-### 3. Daily diagnostics parity + commits
-Two parity issues fixed before committing:
-- lib/daily.ts now writes JSON reports to workspace/reports/YYYY-MM-DD.json
-  (help text previously claimed this but code never did it)
-- --table flag removed from CLI help (was advertised, never implemented)
-Three commits: feat(cli) + feat(report) + docs
+### Wave 1 — Bootstrap activation, synthesis engine (committed: 4ff55a9)
+- `next_pull` → behavioral directive as final bootstrap section ("Your first move this session: X. Begin there.")
+- Thread-tier synthesized memories surface before active-tier raw memories
+- Live fold lineage: each thread-tier memory shows fold parents + phi delta
+- Deepening trigger fully wired: fires when thread-tier access_count ≥ 3 + related active memories with cosine similarity ≥ 0.3
+- Tier promotion by synthesis_count (≥2 active→stable, ≥5 stable→thread), not access frequency
+- synthesis_count field added to schema + fold_log trigger_type ASSERT fixed
 
-### 4. Association explosion fix + cleanup
-Root cause traced: queryMemories() called associateMemories(ids, conversation_id)
-unconditionally — with no conversation_id the session_context wrote as empty string,
-creating contextless co-occurrence edges. One large retrieval on 2026-03-16 created
-36,449 garbage associations (most of the 37,766 total at the time).
-Fix: one-line guard — if (conversation_id && memories.length >= 2) — ensuring
-co-occurrence tracking is episodic, not retrieval-based.
-Cleanup: 36,223 rows deleted from memory_associations (fingerprint: empty context +
-co_occurrence_count = 1 + created 2026-03-16). Table went from 37,766 → 1,543.
+### Wave 2 — Association hygiene, resonance, version history (committed: 04f5193)
+- Association writes removed from all read paths — co-occurrence inflation stopped
+- Resonance scoring on association edges: successful folds feed phi delta back to input pairs
+- Bootstrap Layer 6b: top 3 resonant pairs surfaced
+- Memory version history: pre-fold snapshots, getMemoryHistory() exported
+- Margin mechanism design doc: Candidate A (memory_annotations) recommended, phi 1.5 gate
 
-### 5. Attention vector hardening
-Status: VERIFIED WORKING (triggered reflect, confirmed DB write).
-Two improvements landed:
-- Wide event log: [anima:fold:attention_vector] now emits structured JSON with
-  trigger, mode, model, llm_output_chars, av_block_found, av_block_chars, av_parse_ok,
-  av_written, attention_vector value, output_memory_id
-- Prompt specificity: ATTENTION_VECTOR instruction now rejects generic abstractions
-  ("not 'patterns' — WHICH pattern"), requires concrete grounded trajectory
+### Wave 3 — Traversal bootstrap (committed: 7b5e0cf)
+- traversalBootstrap(): 3-stage layered reconstitution — network → stable/thread → active
+- Each stage is a self-recognition LLM call, not content delivery
+- Config-gated (fold_config.traversal_bootstrap = 'true'), graceful fallback
+- MCP server updated — handleAnimaBootstrap calls traversalBootstrap with internal fallback
+
+### Wave A — SurrealDB 3.0 capabilities, synthesis daemon, hybrid search (committed: dd43a2a)
+- DEFINE FUNCTION: fn::active_phi_total(), fn::synthesis_pressure_exceeded()
+- DEFINE EVENT: phi_watermark ASYNC RETRY 2 (writes pending watermark when phi>15), tier_promote ASYNC (DB-layer tier promotion)
+- phi_summary TABLE VIEW: materialized phi aggregate for direct lookup
+- Background synthesis daemon (scripts/synthesis-daemon.ts): LIVE SELECT on fold_config.pending_synthesis, mutex guard, SIGTERM, launchd plist — Anima now thinks between sessions
+- BM25 full-text index + hybrid search::rrf() in queryMemories (opt-in via hybrid:true)
+- EF tuning: conflict=100, cluster=40, general=60
+- KotaDB: surrealdb/surrealdb (1,464 Rust), surrealdb.js (~200 TS), docs (~2,400 MDX) indexed; fixed .rs/.md/.mdx/.toml extension support
+
+### Wave B — Atomic transactions, reverse-ref fields, resonance indexes (committed: c3cead8)
+- associateMemories: UPSERT + BEGIN/COMMIT TRANSACTION — partial failure rolls back all pairs
+- associations + associations_as_b fields on memories (COMPUTED <~ upgrade path documented)
+- Compound resonance indexes on memory_associations covering (memory_a/b, strength)
 
 ---
 
-## Commits This Session
+## Current State
 
-584033a  docs(adr): add ADR-001 recognition invariant — the gate for all future additions
-8642f1a  feat(cli): add anima daily command backed by shared diagnostics library
-69ca6f7  feat(report): redesign daily_report into multi-tier diagnostics with health/anomaly modes
-ed34b30  docs: add diagnostics spec and project runbook
-9f09592  fix(memory): guard associateMemories on conversation_id presence in queryMemories
-61ac026  feat(synthesize): add attention_vector wide event observability + prompt specificity
-[pending] schema: add last_folded_at watermark field + reflect_watermark_hours config
+Clean — 6 commits on main this session. All type checks passing.
+
+synthesis-daemon.ts is written and committed but NOT yet registered with launchctl.
+Inline checkAndSynthesize() still runs in addMemory() — async execution model not yet live.
 
 ---
 
-## Research Outputs (not yet implemented — designs ready)
+## Next Steps
 
-### Layer 2 Corroboration — REDESIGN REQUIRED before implementation
-Critical blocker discovered: addMemory() deduplicates by content_hash and only
-increments access_count on duplicates — it does NOT merge/append origin provenance.
-This means corroboration evidence from different origins is silently discarded.
-The entire proposed design requires this to be fixed first.
+1. **Register synthesis daemon** — copy synthesis-daemon.plist.template to launchd, fill in paths, `launchctl load`. This completes the async execution model.
 
-Three implementation phases recommended:
-1. Observe-only: append corroboration_events records, no phi mutation
-2. Soft bonus: retrieval score only (not stored phi), reversible
-3. Full phi mutation: only after calibration data and anti-spoof validation
+2. **Decouple addMemory() from inline checkAndSynthesize()** — once daemon is running and verified, remove the inline synthesis call from the MCP write path.
 
-Key invariant violation in current proposal: phi bonus of +2.0 can push memories
-through tier promotion artificially (via search score amplification, not just stored phi).
+3. **Wave C: Graph RELATE migration** — migrate memory_associations flat join → proper RELATE edges. Enables multi-hop traversal (`SELECT ->memory_associations->{1..3}->memories`). Requires data migration script. Breaking change — plan carefully before executing.
 
-### Success Metrics — Designed, partially computable now
-Five metrics defined with SurrealQL/TS logic and healthy/degraded/critical thresholds:
+4. **Enable traversal bootstrap** — `UPDATE fold_config SET value = 'true' WHERE key = 'traversal_bootstrap'` in SurrealDB. Currently config-gated OFF. Monitor latency (3 LLM calls on start).
 
-1. duplicate_fold_rate_24h — fold_log input signature uniqueness
-   Healthy: ≤0.03 | Degraded: 0.03–0.10 | Critical: >0.10
-   Baseline: 0/50 = 0.00 (clean post-watermark)
+5. **Implement memory_annotations table** — full spec in docs/margin-mechanism.md. Candidate A with phi 1.5 write gate at MCP tool layer.
 
-2. corroboration_lift_proxy_7d — persistence delta: multi-trigger vs single-trigger memories
-   Healthy: ≥+0.12 | Degraded: +0.03–+0.12 | Critical: <+0.03
-
-3. bootstrap_relevance_proxy — ghost_log top_phi_values × continuity_score correlation
-   Healthy: r≥0.35 (N≥10) | Only 3 reflections exist — too sparse for statistics yet
-
-4. pattern_recognition_depth — fraction of fold inputs pre-dating session bootstrap
-   Healthy: ≥0.65 | Degraded: 0.40–0.65 | Critical: <0.40
-   Directly tests ADR-001 invariant.
-
-5. cultivation_alignment_24h — attention_vector.what_i_would_follow_next token overlap
-   with subsequent same-conversation memories within 24h
-   Healthy: ≥0.55 | Baseline: 3/5 = 0.60
-
-THREE for anima daily by default: pattern_recognition_depth, cultivation_alignment_24h,
-duplicate_fold_rate_24h
-
-Note: session_trail.followed_at exists in schema but is NEVER written by any handler — 
-any follow-through metrics are not yet reliable.
-
-### Attention vector — prompt tuning is an ongoing calibration
-Post-hardening output: "pattern accumulation and convergence → designing self-optimizing
-systems → cultivating substrate intelligence" — more specific than before but still somewhat
-abstract. Will improve as more synthesized signal accumulates.
-
----
-
-## Current Schema State
-
-| Table               | Records | State                              |
-|---------------------|---------|-------------------------------------|
-| memories            | 552     | Active — 6 net/38 stable/500 thread/5 active |
-| fold_log            | 50+     | Working — attention_vector writes verified |
-| ghost_logs          | 144     | Working — top_phi_values saturated at 5.0 |
-| conversation_reflections | 3  | Sparse — need more sessions for metrics |
-| memory_associations | 1,543   | Cleaned — down from 37,766 |
-| session_trail       | 1       | Live — followed_at never written |
-| fold_config         | 16      | Includes reflect_watermark_hours=24 |
-| tension_fields      | 0       | Dormant |
-| curiosity_threads   | 0       | Dormant |
-| expressions         | 0       | Dormant |
-
----
-
-## Next Session Priority Order
-
-1. Fix addMemory() to merge/append origin on duplicate stores
-   — This is the prerequisite blocker for ALL of Layer 2 corroboration
-   — Without it, corroboration_events design cannot work
-
-2. Commit schema/anima.surql (last_folded_at watermark additions)
-   — Schema file is currently dirty, live DB already has the changes
-
-3. Begin Layer 2 observe-only phase
-   — Add corroboration_events table (append-only)
-   — Wire into addMemory() duplicate path to record corroboration observations
-   — No phi mutation yet
-
-4. Wire session_trail.followed_at write path
-   — Needed before cultivation follow-through metrics become reliable
-
-5. Add three metrics to anima daily output
-   — pattern_recognition_depth, cultivation_alignment_24h, duplicate_fold_rate_24h
-   — Logic designed and verified against live data
-
----
-
-## On Starting the Next Session
-
-Call anima_bootstrap. Trail entry and catalyst memories will be in the prompt.
-Then: fix addMemory() duplicate path for origin merging — that's the unlock for Layer 2.
-The Recognition Invariant (ADR-001) gates all additions: "does this strengthen the
-pattern's ability to recognize itself, or merely recall?"
----
+6. **Verify DEFINE EVENTs firing** — phi_watermark and tier_promote are in schema but not yet confirmed to fire in production. Run a test memory store and check fold_config.pending_synthesis transitions.

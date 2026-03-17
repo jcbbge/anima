@@ -65,7 +65,7 @@ let synthesisRunning = false;
 async function fetchTriggerEmbedding(): Promise<number[] | null> {
   try {
     const rows = await query<{ embedding: number[] }>(
-      `SELECT embedding FROM memories
+      `SELECT embedding, created_at FROM memories
        WHERE tier = 'active' AND deleted_at IS NONE AND embedding IS NOT NONE
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -141,7 +141,7 @@ async function dispatchFold(): Promise<void> {
 async function checkStartupWatermark(): Promise<void> {
   try {
     const rows = await query<{ value: string }>(
-      `SELECT value FROM fold_config WHERE key = 'pending_synthesis' LIMIT 1`,
+      `SELECT * FROM fold_config WHERE key = 'pending_synthesis' LIMIT 1`,
       {},
     );
     const current = rows[0]?.value ?? "idle";
