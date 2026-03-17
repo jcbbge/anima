@@ -9,7 +9,7 @@
  * Phi-weighted scoring: score = (cosine * 0.7) + ((phi / 5.0) * 0.3)
  */
 
-import { query } from "./db.ts";
+import { query, getDb } from "./db.ts";
 import { generateEmbedding } from "./embed.ts";
 import { generateHash } from "./hash.ts";
 import { callSynthesisLLM } from "./llm.ts";
@@ -885,11 +885,10 @@ export async function getStats(): Promise<AnimaStats> {
 export async function associateMemories(memoryIds: string[], sessionContext?: string): Promise<void> {
   if (memoryIds.length < 2) return;
 
-  // Build all unique pairs
+  // Build all unique pairs in canonical order so (a,b) and (b,a) are the same edge
   const pairs: Array<[string, string]> = [];
   for (let i = 0; i < memoryIds.length; i++) {
     for (let j = i + 1; j < memoryIds.length; j++) {
-      // Canonical order: sort so (a,b) and (b,a) are the same pair
       const pair: [string, string] = memoryIds[i] < memoryIds[j]
         ? [memoryIds[i], memoryIds[j]]
         : [memoryIds[j], memoryIds[i]];
@@ -897,40 +896,32 @@ export async function associateMemories(memoryIds: string[], sessionContext?: st
     }
   }
 
-  // Upsert each pair — increment co_occurrence_count if exists, create if not
-  for (const [a, b] of pairs) {
-    try {
-      const existing = await query<{ id: string }>(
-        `SELECT id FROM memory_associations WHERE memory_a = $a AND memory_b = $b LIMIT 1`,
-        { a, b },
-      );
+  // Build one UPSERT per pair, batched inside a single transaction.
+  // UPSERT creates the row if absent, or updates it if present —
+  // eliminating the separate SELECT + CREATE/UPDATE round-trips.
+  // All pairs are committed atomically; any failure rolls back the whole set.
+  try {
+    const vars: Record<string, unknown> = {};
+    const stmts = pairs.map(([a, b], idx) => {
+      vars[`a${idx}`] = a;
+      vars[`b${idx}`] = b;
+      vars[`ctx${idx}`] = sessionContext ?? "";
+      return `UPSERT memory_associations
+        SET memory_a          = $a${idx},
+            memory_b          = $b${idx},
+            co_occurrence_count = IF co_occurrence_count IS NONE THEN 1 ELSE co_occurrence_count + 1 END,
+            strength          = IF strength IS NONE THEN 1.0 ELSE math::min(5.0, strength + 0.1) END,
+            session_contexts  = IF session_contexts IS NONE THEN [$ctx${idx}] ELSE array::append(session_contexts, $ctx${idx}) END,
+            created_at        = IF created_at IS NONE THEN time::now() ELSE created_at END,
+            updated_at        = time::now()
+        WHERE memory_a = $a${idx} AND memory_b = $b${idx};`;
+    });
 
-      if (existing.length > 0) {
-        await query(
-          `UPDATE memory_associations SET
-             co_occurrence_count += 1,
-             strength = math::min(5.0, strength + 0.1),
-             session_contexts = array::append(session_contexts, $ctx),
-             updated_at = time::now()
-           WHERE memory_a = $a AND memory_b = $b`,
-          { a, b, ctx: sessionContext ?? "" },
-        );
-      } else {
-        await query(
-          `CREATE memory_associations SET
-             memory_a = $a,
-             memory_b = $b,
-             strength = 1.0,
-             co_occurrence_count = 1,
-             session_contexts = [$ctx],
-             created_at = time::now(),
-             updated_at = time::now()`,
-          { a, b, ctx: sessionContext ?? "" },
-        );
-      }
-    } catch {
-      // Association tracking is best-effort — never block the caller
-    }
+    const sql = `BEGIN TRANSACTION;\n${stmts.join("\n")}\nCOMMIT TRANSACTION;`;
+    const client = await getDb();
+    await client.query(sql, vars);
+  } catch {
+    // Association tracking is best-effort — never block the caller
   }
 }
 

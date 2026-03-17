@@ -138,6 +138,12 @@ DEFINE FIELD created_at          ON memory_associations TYPE datetime DEFAULT ti
 DEFINE FIELD updated_at          ON memory_associations TYPE datetime DEFAULT time::now();
 DEFINE INDEX assoc_pair ON memory_associations FIELDS memory_a, memory_b UNIQUE;
 
+-- Compound indexes for resonant-pairs bootstrap query:
+-- SELECT * FROM memory_associations WHERE memory_a = $id ORDER BY strength DESC
+-- SELECT * FROM memory_associations WHERE memory_b = $id ORDER BY strength DESC
+DEFINE INDEX IF NOT EXISTS idx_assoc_a_resonance ON memory_associations FIELDS memory_a, strength;
+DEFINE INDEX IF NOT EXISTS idx_assoc_b_resonance ON memory_associations FIELDS memory_b, strength;
+
 
 -- =====================================================
 -- FOLD_CONFIG: System parameters (renamed to avoid 'config' reserved keyword)
@@ -299,6 +305,23 @@ DEFINE FIELD related_tension   ON memories TYPE option<record<tension_fields>>;
 -- synthesis_count is written by performFold() — define it here so
 -- the SCHEMAFULL memories table accepts the field and events can read it.
 DEFINE FIELD IF NOT EXISTS synthesis_count ON memories TYPE int DEFAULT 0;
+
+-- Reverse-reference fields: all memory_associations where this memory appears.
+-- associations   — records where this memory is memory_a (primary node)
+-- associations_as_b — records where this memory is memory_b (secondary node)
+--
+-- NOTE: SurrealDB 3.0 REFERENCE back-reference COMPUTED syntax is not yet
+-- confirmed stable. These are declared as plain writable fields (DEFAULT [])
+-- and populated by the application layer (associateMemories / queryMemories).
+-- When SurrealDB COMPUTED <~ syntax is confirmed, replace with:
+--   COMPUTED <~(memory_associations FIELD memory_a)
+--   COMPUTED <~(memory_associations FIELD memory_b)
+DEFINE FIELD IF NOT EXISTS associations ON memories
+  TYPE option<array<record<memory_associations>>>
+  DEFAULT [];
+DEFINE FIELD IF NOT EXISTS associations_as_b ON memories
+  TYPE option<array<record<memory_associations>>>
+  DEFAULT [];
 
 
 -- =====================================================
