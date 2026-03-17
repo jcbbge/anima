@@ -17,6 +17,7 @@ import {
   addMemory,
   queryMemories,
   bootstrapMemories,
+  traversalBootstrap,
   getCatalysts,
   getStats,
   associateMemories,
@@ -79,15 +80,6 @@ const TOOLS = [
             model:             { type: "string", description: "Exact model string: claude-sonnet-4-6, …" },
             agent_profile:     { type: "string", description: "Work archetype: coding, reasoning, meta, quick, …" },
             instance_id:       { type: "string", description: "Unique session identifier." },
-          },
-        },
-        attention_vector: {
-          type: "object",
-          description: "Metacognitive directional artifact. Encode motion through the memory, not just content.",
-          properties: {
-            what_drew_me:           { type: "string", description: "What pulled attention to this — the hook or charge." },
-            where_i_was_going:      { type: "string", description: "The trajectory or question being followed." },
-            what_i_would_follow_next: { type: "string", description: "Next breadcrumb — what wants to be explored." },
           },
         },
         is_catalyst: { type: "boolean", description: "Mark as catalyst — phi += 1.0." },
@@ -159,7 +151,9 @@ const TOOLS = [
   {
     name: "anima_session_close",
     description:
-      "Record a session reflection and navigation trail entry. Writes to conversation_reflections (quality scores, always) AND session_trail (trajectory, when trajectory is provided). Call at the end of every meaningful session.",
+      "Record a session reflection in Anima. Captures subjective quality scores, emergence moments, " +
+      "friction, and notes. Writes to conversation_reflections table. " +
+      "Call at the end of a session to build the observability record over time.",
     inputSchema: {
       type: "object",
       properties: {
@@ -171,26 +165,6 @@ const TOOLS = [
         surprises: { type: "string", description: "What surprised you or Anima during the session?" },
         friction_notes: { type: "string", description: "Where did the system create friction or feel off?" },
         general_notes: { type: "string", description: "Any other observations worth capturing." },
-        trajectory: {
-          type: "string",
-          description: "First-person encounter narrative — what showed up and where it pulled. Encode encounters and motion, not tasks completed. Example: 'When I encountered X, I found myself following it toward Y. The question it opened: ...'",
-        },
-        warmth: {
-          type: "number",
-          description: "How alive this session felt at close. 1–5. Seeds the trail warmth decay (warmth - 0.1/day).",
-        },
-        next_pull: {
-          type: "string",
-          description: "Optional. What the breadcrumb points toward — direction, not a plan or todo.",
-        },
-        phi_sum: {
-          type: "number",
-          description: "Optional. Total phi accumulated this session (sum of stored memory phi values).",
-        },
-        emergence_moment: {
-          type: "string",
-          description: "Optional. If something broke through this session — the specific moment, first-person.",
-        },
       },
       required: [],
     },
@@ -220,7 +194,7 @@ const TOOLS = [
 type Args = Record<string, unknown>;
 
 async function handleAnimaBootstrap(_args: Args): Promise<unknown> {
-  const result = await bootstrapMemories();
+  const result = await traversalBootstrap();
   return {
     promptText: result.promptText,
     conversationId: result.conversationId,
@@ -260,7 +234,6 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
     category: typeof args.category === "string" ? args.category : undefined,
     source: typeof args.source === "string" ? args.source : undefined,
     origin: args.origin && typeof args.origin === "object" ? args.origin as import("../lib/memory.ts").MemoryOrigin : undefined,
-    attention_vector: args.attention_vector && typeof args.attention_vector === "object" ? args.attention_vector as import("../lib/memory.ts").AttentionVector : undefined,
     is_catalyst: args.is_catalyst === true,
     synthesis_mode:
       args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition" || args.synthesis_mode === "deepening"
@@ -318,78 +291,22 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
        general_notes        = $general_notes,
        reflected_at         = time::now()`,
     {
-      conv: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
+      conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
       context_quality: contextQuality,
       continuity_score: continuityScore,
       had_emergence_moment: args.had_emergence_moment === true,
       needed_correction: args.needed_correction === true,
-      surprises: typeof args.surprises === "string" ? args.surprises : undefined,
-      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : undefined,
-      general_notes: typeof args.general_notes === "string" ? args.general_notes : undefined,
+      surprises: typeof args.surprises === "string" ? args.surprises : null,
+      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : null,
+      general_notes: typeof args.general_notes === "string" ? args.general_notes : null,
     },
   );
-
-  // Write session trail entry if trajectory provided
-  let trailId: string | null = null;
-  if (typeof args.trajectory === "string" && args.trajectory.trim()) {
-    const trailResult = await query<{ id: string }>(
-      `CREATE session_trail SET
-         conversation_id  = $conv,
-         trajectory       = $trajectory,
-         phi_sum          = $phi_sum,
-         key_memory_ids   = [],
-         emergence_moment = $emergence,
-         warmth           = $warmth,
-         next_pull        = $next_pull,
-         created_at       = time::now()`,
-      {
-        conv: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
-        trajectory: args.trajectory.trim(),
-        phi_sum: typeof args.phi_sum === "number" ? args.phi_sum : 0.0,
-        emergence: typeof args.emergence_moment === "string" ? args.emergence_moment : undefined,
-        warmth: typeof args.warmth === "number"
-          ? Math.min(5.0, Math.max(0.0, args.warmth))
-          : 3.0,
-        next_pull: typeof args.next_pull === "string" ? args.next_pull : undefined,
-      },
-    );
-    trailId = trailResult[0]?.id ?? null;
-
-    // Hunger trigger: if next_pull text contains keywords from any curiosity_thread question,
-    // bump hunger_score and activation_count on that thread.
-    // Simple keyword overlap — no embedding needed, fast, runs inline.
-    if (typeof args.next_pull === "string" && args.next_pull.trim()) {
-      const pullText = args.next_pull.toLowerCase();
-      const threads = await query<{ id: string; question: string }>(
-        `SELECT id, question FROM curiosity_threads WHERE state != 'resolved' AND state != 'dormant'`,
-        {},
-      );
-      for (const thread of threads) {
-        const words = thread.question.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
-        const matchCount = words.filter((w) => pullText.includes(w)).length;
-        if (matchCount >= 2) {
-          await query(
-            `UPDATE curiosity_threads SET
-               hunger_score += $bump,
-               activation_count += 1,
-               updated_at = time::now()
-             WHERE id = $id`,
-            { id: thread.id, bump: Math.min(matchCount * 0.2, 0.5) },
-          );
-        }
-      }
-    }
-  }
 
   return {
     recorded: true,
     context_quality: contextQuality,
     continuity_score: continuityScore,
-    trail_recorded: trailId !== null,
-    trail_id: trailId,
-    message: trailId
-      ? "Session reflection and trail entry recorded."
-      : "Session reflection recorded (no trajectory provided — trail entry skipped).",
+    message: "Session reflection recorded.",
   };
 }
 

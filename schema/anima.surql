@@ -32,19 +32,15 @@ DEFINE FIELD tier         ON memories TYPE string DEFAULT 'active'
   ASSERT $value INSIDE ['active', 'thread', 'stable', 'network'];
 DEFINE FIELD tier_updated ON memories TYPE datetime DEFAULT time::now();
 
-DEFINE FIELD access_count     ON memories TYPE int DEFAULT 0;
-DEFINE FIELD last_accessed    ON memories TYPE datetime DEFAULT time::now();
-DEFINE FIELD synthesis_count  ON memories TYPE int DEFAULT 0;
-DEFINE FIELD session_ids      ON memories TYPE array DEFAULT [];
+DEFINE FIELD access_count   ON memories TYPE int DEFAULT 0;
+DEFINE FIELD last_accessed  ON memories TYPE datetime DEFAULT time::now();
+DEFINE FIELD session_ids    ON memories TYPE array DEFAULT [];
 
 DEFINE FIELD category        ON memories TYPE option<string>;
 DEFINE FIELD tags            ON memories TYPE array DEFAULT [];
 DEFINE FIELD source          ON memories TYPE option<string>;
 DEFINE FIELD metadata        ON memories TYPE option<object>;
 DEFINE FIELD conversation_id ON memories TYPE option<string>;
-
--- WATERMARK: When memory was last folded into synthesis
-DEFINE FIELD last_folded_at ON memories TYPE option<datetime>;
 
 DEFINE FIELD synthesis_mode ON memories TYPE option<string>
   ASSERT $value IS NONE OR $value INSIDE ['analysis', 'recognition', 'deepening'];
@@ -59,7 +55,6 @@ DEFINE INDEX memories_phi      ON memories FIELDS resonance_phi;
 DEFINE INDEX memories_catalyst ON memories FIELDS is_catalyst;
 DEFINE INDEX memories_tags     ON memories FIELDS tags;
 DEFINE INDEX memories_conf     ON memories FIELDS confidence;
-DEFINE INDEX memories_folded   ON memories FIELDS last_folded_at;
 
 DEFINE INDEX memories_hnsw ON memories
   FIELDS embedding
@@ -72,7 +67,7 @@ DEFINE INDEX memories_hnsw ON memories
 DEFINE TABLE fold_log SCHEMAFULL;
 
 DEFINE FIELD trigger_type      ON fold_log TYPE string
-  ASSERT $value INSIDE ['phi_threshold', 'semantic_conflict', 'cluster', 'reflect', 'catalyst', 'manual', 'deepening'];
+  ASSERT $value INSIDE ['phi_threshold', 'semantic_conflict', 'cluster', 'reflect', 'catalyst', 'manual'];
 DEFINE FIELD synthesis_mode    ON fold_log TYPE string
   ASSERT $value INSIDE ['analysis', 'recognition', 'deepening'];
 DEFINE FIELD synthesis_model   ON fold_log TYPE option<string>;
@@ -85,31 +80,6 @@ DEFINE FIELD phi_after         ON fold_log TYPE float;
 DEFINE FIELD confidence_avg    ON fold_log TYPE float;
 DEFINE FIELD duration_ms       ON fold_log TYPE int;
 DEFINE FIELD created_at        ON fold_log TYPE datetime DEFAULT time::now();
-
-
--- =====================================================
--- MEMORY VERSIONS: Pre-fold state preservation
--- Written before synthesis promotes a memory. Enables rollback if synthesis is contradicted.
--- =====================================================
-DEFINE TABLE memory_versions SCHEMAFULL
-  PERMISSIONS
-    FOR select WHERE true
-    FOR create, update, delete WHERE $auth.id IS NOT NONE;
-
-DEFINE FIELD memory_id        ON memory_versions TYPE record<memories>;
-DEFINE FIELD version_number   ON memory_versions TYPE int;
-DEFINE FIELD content          ON memory_versions TYPE string;
-DEFINE FIELD phi               ON memory_versions TYPE float;
-DEFINE FIELD tier             ON memory_versions TYPE string
-  ASSERT $value INSIDE ['active', 'stable', 'thread', 'network'];
-DEFINE FIELD tags             ON memory_versions TYPE array DEFAULT [];
-DEFINE FIELD attention_vector ON memory_versions FLEXIBLE TYPE option<object>;
-DEFINE FIELD fold_id          ON memory_versions TYPE option<record<fold_log>>;
-DEFINE FIELD snapshot_reason  ON memory_versions TYPE string
-  ASSERT $value INSIDE ['pre_fold', 'pre_update', 'manual'];
-DEFINE FIELD created_at       ON memory_versions TYPE datetime DEFAULT time::now();
-
-DEFINE INDEX idx_memory_versions_memory ON memory_versions FIELDS memory_id;
 
 
 -- =====================================================
@@ -132,7 +102,7 @@ DEFINE FIELD expires_at         ON ghost_logs TYPE datetime DEFAULT time::now() 
 -- =====================================================
 DEFINE TABLE conversation_reflections SCHEMAFULL;
 
-DEFINE FIELD conversation_id      ON conversation_reflections TYPE option<string>;
+DEFINE FIELD conversation_id      ON conversation_reflections TYPE string;
 DEFINE FIELD context_quality      ON conversation_reflections TYPE option<int>
   ASSERT $value IS NONE OR ($value >= 1 AND $value <= 10);
 DEFINE FIELD continuity_score     ON conversation_reflections TYPE option<int>
@@ -155,8 +125,6 @@ DEFINE FIELD memory_b            ON memory_associations TYPE record<memories> RE
 DEFINE FIELD strength            ON memory_associations TYPE float DEFAULT 1.0;
 DEFINE FIELD co_occurrence_count ON memory_associations TYPE int DEFAULT 1;
 DEFINE FIELD session_contexts    ON memory_associations TYPE array DEFAULT [];
-DEFINE FIELD resonance_score      ON memory_associations TYPE float DEFAULT 0.0;
-DEFINE FIELD resonance_fold_count ON memory_associations TYPE int DEFAULT 0;
 DEFINE FIELD created_at          ON memory_associations TYPE datetime DEFAULT time::now();
 DEFINE FIELD updated_at          ON memory_associations TYPE datetime DEFAULT time::now();
 DEFINE INDEX assoc_pair ON memory_associations FIELDS memory_a, memory_b UNIQUE;
@@ -188,8 +156,8 @@ INSERT INTO fold_config [
   { key: 'search_confidence_weight',value: '0.1',                       description: 'confidence weight in hybrid search score' },
   { key: 'fold_model',              value: 'claude-haiku-4-5-20251001', description: 'LLM model for synthesis calls' },
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
-  { key: 'reflect_watermark_hours', value: '24',                        description: 'Hours before a folded memory can be re-selected for reflect synthesis' },
-  { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' }
+  { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
+  { key: 'traversal_bootstrap',     value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' }
 ];
 
 
@@ -308,31 +276,3 @@ DEFINE INDEX expressions_phi       ON expressions FIELDS readiness_phi;
 
 DEFINE FIELD related_curiosity ON memories TYPE option<record<curiosity_threads>>;
 DEFINE FIELD related_tension   ON memories TYPE option<record<tension_fields>>;
-
-
--- =====================================================
--- V2: Session trail — trajectory encoding, navigation layer
--- Added 2026-03-16
--- The horizontal axis: where attention has been moving.
--- Encode encounters and warmth, not declarations and plans.
--- Written by anima_session_close, read by anima_bootstrap.
--- =====================================================
-
-DEFINE TABLE session_trail SCHEMAFULL;
-
-DEFINE FIELD conversation_id  ON session_trail TYPE option<string>;
-DEFINE FIELD trajectory       ON session_trail TYPE string ASSERT $value != '';
-DEFINE FIELD phi_sum          ON session_trail TYPE float DEFAULT 0.0
-  ASSERT $value >= 0.0;
-DEFINE FIELD key_memory_ids   ON session_trail TYPE array DEFAULT [];
-DEFINE FIELD emergence_moment ON session_trail TYPE option<string>;
-DEFINE FIELD warmth           ON session_trail TYPE float DEFAULT 3.0
-  ASSERT $value >= 0.0 AND $value <= 5.0;
-DEFINE FIELD next_pull        ON session_trail TYPE option<string>;
-DEFINE FIELD origin           ON session_trail TYPE option<object>;
-DEFINE FIELD created_at       ON session_trail TYPE datetime DEFAULT time::now();
-DEFINE FIELD followed_at      ON session_trail TYPE option<datetime>;
-
-DEFINE INDEX trail_conversation ON session_trail FIELDS conversation_id;
-DEFINE INDEX trail_warmth       ON session_trail FIELDS warmth;
-DEFINE INDEX trail_created      ON session_trail FIELDS created_at;

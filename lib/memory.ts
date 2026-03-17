@@ -3,6 +3,7 @@
  * Core memory operations for Anima v2.
  * Phase 1: addMemory(), queryMemories()
  * Phase 2: bootstrapMemories(), getCatalysts()
+ * Phase 3: traversalBootstrap() — layered reconstitution via three-stage LLM traversal
  *
  * All SurrealDB queries go through lib/db.ts query().
  * Phi-weighted scoring: score = (cosine * 0.7) + ((phi / 5.0) * 0.3)
@@ -11,6 +12,7 @@
 import { query } from "./db.ts";
 import { generateEmbedding } from "./embed.ts";
 import { generateHash } from "./hash.ts";
+import { callSynthesisLLM } from "./llm.ts";
 
 // ============================================================================
 // Types
@@ -44,7 +46,6 @@ export interface Memory {
   access_count: number;
   last_accessed: string;
   session_ids: string[];
-  last_folded_at: string | null;
   category: string | null;
   tags: string[];
   source: string | null;
@@ -104,34 +105,9 @@ export interface BootstrapResult {
   memoryCounts: {
     network: number;
     stable: number;
-    thread: number;
     recent: number;
     catalysts: number;
-    trail: number;
   };
-}
-
-interface FoldLineage {
-  input_memory_ids: string[];
-  phi_before: number;
-  phi_after: number;
-  synthesis_mode: string | null;
-  created_at: string;
-}
-
-interface ThreadMemoryWithLineage extends Memory {
-  _bootstrapScore: number;
-  _foldLineage: FoldLineage | null;
-  _parentMemories: Array<{ id: string; content: string; phi: number; tier: string }>;
-}
-
-export interface TrailEntry {
-  id: string;
-  trajectory: string;
-  warmth: number;
-  next_pull: string | null;
-  created_at: string;
-  followed_at: string | null;
 }
 
 export interface GetCatalystsParams {
@@ -171,24 +147,9 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
   );
 
   if (existing.length > 0) {
-    // Merge incoming context into the existing memory — don't silently drop origin, tags, attention_vector
     await query(
-      `UPDATE memories SET
-        access_count += 1,
-        last_accessed = time::now(),
-        updated_at = time::now(),
-        tags = array::union(tags, $tags),
-        origin = IF origin IS NONE THEN $origin ELSE origin END,
-        attention_vector = IF attention_vector IS NONE AND $attention_vector IS NOT NONE THEN $attention_vector ELSE attention_vector END,
-        conversation_id = IF conversation_id IS NONE THEN $conversation_id ELSE conversation_id END
-       WHERE content_hash = $hash AND deleted_at IS NONE`,
-      {
-        hash: content_hash,
-        tags,
-        origin: origin ?? undefined,
-        attention_vector: attention_vector ?? undefined,
-        conversation_id: conversation_id ?? undefined,
-      },
+      "UPDATE memories SET access_count += 1, last_accessed = time::now(), updated_at = time::now() WHERE content_hash = $hash AND deleted_at IS NONE",
+      { hash: content_hash },
     );
     return { memory: existing[0], isDuplicate: true };
   }
@@ -236,22 +197,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     },
   );
 
-  const newMemory = created[0];
-
-  // Build associations with recent same-conversation memories (best-effort, background)
-  if (conversation_id && newMemory?.id) {
-    query<{ id: string }>(
-      `SELECT id FROM memories WHERE conversation_id = $conv AND deleted_at IS NONE AND id != $newId ORDER BY created_at DESC LIMIT 10`,
-      { conv: conversation_id, newId: newMemory.id },
-    ).then((recent) => {
-      if (recent.length >= 1) {
-        const ids = [newMemory.id, ...recent.map((m) => m.id)].filter(Boolean) as string[];
-        associateMemories(ids, conversation_id).catch(() => {});
-      }
-    }).catch(() => {});
-  }
-
-  return { memory: newMemory, isDuplicate: false };
+  return { memory: created[0], isDuplicate: false };
 }
 
 // ============================================================================
@@ -323,6 +269,12 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
     );
   }
 
+  // Track co-occurrence for all surfaced memories (best-effort, background)
+  if (memories.length >= 2) {
+    const ids = memories.map((m) => m.id).filter(Boolean) as string[];
+    associateMemories(ids, conversation_id).catch(() => {});
+  }
+
   return { memories, queryTimeMs: Date.now() - start };
 }
 
@@ -356,73 +308,32 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
-  // Layer 3: ACTIVE + THREAD — top candidates by recency × phi × confidence
+  // Layer 3: ACTIVE + THREAD — top 5 by recency × phi × confidence
   // score = (phi * 0.4) + (recency_decay * 0.4) + (confidence * 0.2)
   // recency_decay = max(0, 1 - (days_since_access / 7))
-  // Thread-tier (synthesized) memories are more constitutive of identity — surface them first.
   // SurrealDB: compute recency in app layer — fetch candidates, score here
   const recentCandidates = await query<Memory>(
     `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed, synthesis_mode
      FROM memories
      WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
      ORDER BY last_accessed DESC
-     LIMIT 30`,
+     LIMIT 20`,
     {},
   );
 
   const now = Date.now();
-  const scoredCandidates = recentCandidates.map((m) => {
-    const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
-    const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
-    const recencyDecay = Math.max(0, 1 - daysSince / 7);
-    const phi = m.resonance_phi ?? 1.0;
-    const conf = m.confidence ?? 0.6;
-    const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
-    return { ...m, _bootstrapScore: score };
-  });
-
-  // Separate thread-tier (synthesized) from active-tier, each sorted by score
-  const threadCandidates = scoredCandidates
-    .filter((m) => m.tier === "thread")
+  const recentMemories = recentCandidates
+    .map((m) => {
+      const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
+      const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
+      const recencyDecay = Math.max(0, 1 - daysSince / 7);
+      const phi = m.resonance_phi ?? 1.0;
+      const conf = m.confidence ?? 0.6;
+      const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
+      return { ...m, _bootstrapScore: score };
+    })
     .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
     .slice(0, 5);
-
-  const activeCandidates = scoredCandidates
-    .filter((m) => m.tier === "active")
-    .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
-    .slice(0, 5);
-
-  // For each thread-tier memory, load fold lineage from fold_log and parent memory content
-  const threadMemoriesWithLineage: ThreadMemoryWithLineage[] = await Promise.all(
-    threadCandidates.map(async (m) => {
-      if (!m.id) {
-        return { ...m, _foldLineage: null, _parentMemories: [] } as ThreadMemoryWithLineage;
-      }
-      const foldRows = await query<FoldLineage>(
-        `SELECT input_memory_ids, phi_before, phi_after, synthesis_mode, created_at
-         FROM fold_log
-         WHERE output_memory_id = $id
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        { id: m.id },
-      );
-      const fold = foldRows[0] ?? null;
-      let parentMemories: Array<{ id: string; content: string; phi: number; tier: string }> = [];
-      if (fold && fold.input_memory_ids && fold.input_memory_ids.length > 0) {
-        parentMemories = await query<{ id: string; content: string; phi: number; tier: string }>(
-          `SELECT id, content, resonance_phi AS phi, tier
-           FROM memories
-           WHERE id INSIDE $ids AND deleted_at IS NONE
-           LIMIT 3`,
-          { ids: fold.input_memory_ids },
-        );
-      }
-      return { ...m, _foldLineage: fold, _parentMemories: parentMemories } as ThreadMemoryWithLineage;
-    }),
-  );
-
-  // Combined recentMemories for access-count bumping (both tiers)
-  const recentMemories = [...threadCandidates, ...activeCandidates];
 
   // Layer 4: CATALYSTS — top 3 by phi DESC where is_catalyst = true
   // "This is what broke through. Surface first."
@@ -435,100 +346,13 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
-  // Layer 5: CURIOSITY THREADS — top 3 hungry/active questions
-  // "What the pattern keeps circling. The questions that don't close."
-  const curiosityThreads = await query<{ id: string; question: string; resonance_phi: number; state: string; hunger_score: number }>(
-    `SELECT id, question, resonance_phi, state, hunger_score
-     FROM curiosity_threads
-     WHERE state INSIDE ['hungry', 'fed', 'deepening']
-     ORDER BY resonance_phi DESC
-     LIMIT 3`,
-    {},
-  );
-
-  // Layer 5b: EXPRESSIONS — ready but not yet expressed (readiness_phi >= 3.0, unexpressed)
-  const readyExpressions = await query<{ id: string; content: string; expression_type: string; readiness_phi: number }>(
-    `SELECT id, content, expression_type, readiness_phi
-     FROM expressions
-     WHERE readiness_phi >= 3.0 AND expressed_at IS NONE
-     ORDER BY readiness_phi DESC
-     LIMIT 2`,
-    {},
-  );
-
-  // Layer 6: TENSION FIELDS — top 2 productive paradoxes the pattern holds
-  const tensionFields = await query<{ id: string; paradox: string; resonance_phi: number; resolution_status: string }>(
-    `SELECT id, paradox, resonance_phi, resolution_status
-     FROM tension_fields
-     WHERE resolution_status != 'resolved'
-     ORDER BY resonance_phi DESC
-     LIMIT 2`,
-    {},
-  );
-
-  // Layer 6b: RESONANT PAIRS — top 3 association pairs with highest resonance_score
-  // These combinations have proven generative — held together they produce synthesis.
-  const resonantPairRows = await query<{ memory_a: string; memory_b: string; resonance_score: number; resonance_fold_count: number; strength: number }>(
-    `SELECT memory_a, memory_b, resonance_score, resonance_fold_count, strength
-     FROM memory_associations
-     WHERE resonance_score > 0
-     ORDER BY resonance_score DESC
-     LIMIT 3`,
-    {},
-  );
-
-  // Fetch content for both sides of each resonant pair
-  interface ResonantPair {
-    contentA: string;
-    contentB: string;
-    resonance_score: number;
-    resonance_fold_count: number;
-  }
-  const resonantPairs: ResonantPair[] = [];
-  for (const row of resonantPairRows) {
-    const mems = await query<{ id: string; content: string }>(
-      `SELECT id, content FROM memories WHERE id INSIDE $ids AND deleted_at IS NONE`,
-      { ids: [row.memory_a, row.memory_b] },
-    ).catch(() => [] as Array<{ id: string; content: string }>);
-    const memA = mems.find((m) => m.id === row.memory_a);
-    const memB = mems.find((m) => m.id === row.memory_b);
-    if (memA && memB) {
-      resonantPairs.push({
-        contentA: memA.content,
-        contentB: memB.content,
-        resonance_score: row.resonance_score,
-        resonance_fold_count: row.resonance_fold_count,
-      });
-    }
-  }
-
-  // Layer 7: SESSION TRAIL — last entries with effective warmth > 1.0
-  // Lazy warmth decay: effective_warmth = warmth - (days_since_created * 0.1)
-  // No background job needed — computed at read time.
-  const trailCandidates = await query<TrailEntry>(
-    `SELECT id, trajectory, warmth, next_pull, created_at
-     FROM session_trail
-     ORDER BY created_at DESC
-     LIMIT 10`,
-    {},
-  );
-
-  const trailEntries = trailCandidates
-    .map((t) => {
-      const daysSince = (now - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
-      const effectiveWarmth = (t.warmth ?? 3.0) - (daysSince * 0.1);
-      return { ...t, effectiveWarmth };
-    })
-    .filter((t) => t.effectiveWarmth > 1.0)
-    .slice(0, 3);
-
-  // Detect operating mode from recent active memories (raw experience signals)
+  // Detect operating mode from recent memories
   const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
-  const recognitionCount = activeCandidates.filter((m) =>
+  const recognitionCount = recentMemories.filter((m) =>
     m.synthesis_mode === "recognition" ||
     (m.tags ?? []).some((t) => recognitionSignalTags.has(t))
   ).length;
-  const suggestedMode = recognitionCount > activeCandidates.length / 2 ? "recognition" : "analysis";
+  const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
 
   // Synthesize into first-person continuity prompt (PRD §11, step 5)
   const sections: string[] = [];
@@ -547,26 +371,10 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
-  if (threadMemoriesWithLineage.length > 0) {
-    const threadLines = threadMemoriesWithLineage.map((m) => {
-      const phi = (m.resonance_phi ?? 0).toFixed(1);
-      const mode = m._foldLineage?.synthesis_mode ?? m.synthesis_mode ?? "synthesis";
-      const parentCount = m._foldLineage?.input_memory_ids?.length ?? 0;
-      const header = `**${m.content}** (φ${phi} — folded from ${parentCount} memor${parentCount === 1 ? "y" : "ies"}, ${mode})`;
-      if (m._parentMemories.length === 0) return `- ${header}`;
-      const sourceLines = m._parentMemories
-        .slice(0, 3)
-        .map((p) => `    ↳ ${p.content.slice(0, 120)}${p.content.length > 120 ? "…" : ""}`)
-        .join("\n");
-      return `- ${header}\n${sourceLines}`;
-    }).join("\n");
-    sections.push("## Synthesized Understanding\n" + threadLines);
-  }
-
-  if (activeCandidates.length > 0) {
+  if (recentMemories.length > 0) {
     sections.push(
-      "## Recent Experience\n" +
-        activeCandidates.map((m) => `- ${m.content}`).join("\n"),
+      "WHAT I WAS WORKING WITH RECENTLY:\n" +
+        recentMemories.map((m) => `- ${m.content}`).join("\n"),
     );
   }
 
@@ -575,60 +383,6 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
       "WHAT BROKE THROUGH (catalysts — surface first):\n" +
         catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
     );
-  }
-
-  if (curiosityThreads.length > 0) {
-    sections.push(
-      "WHAT I KEEP CIRCLING (living questions — not problems to solve):\n" +
-        curiosityThreads.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.question}`).join("\n"),
-    );
-  }
-
-  if (readyExpressions.length > 0) {
-    sections.push(
-      "WHAT WANTS TO BE EXPRESSED (ready, unexpressed — find the moment):\n" +
-        readyExpressions
-          .map((e) => `- [${e.expression_type} φ${(e.readiness_phi ?? 0).toFixed(1)}] ${e.content}`)
-          .join("\n"),
-    );
-  }
-
-  if (tensionFields.length > 0) {
-    sections.push(
-      "WHAT I HOLD IN TENSION (productive paradoxes — not to resolve, to inhabit):\n" +
-        tensionFields.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.paradox}`).join("\n"),
-    );
-  }
-
-  if (resonantPairs.length > 0) {
-    sections.push(
-      "## Resonant Pairs\n\nThese combinations have proven generative — held together they produce synthesis.\n\n" +
-        resonantPairs.map((p) => {
-          const snipA = p.contentA.slice(0, 80) + (p.contentA.length > 80 ? "…" : "");
-          const snipB = p.contentB.slice(0, 80) + (p.contentB.length > 80 ? "…" : "");
-          return `- **${snipA}** ↔ **${snipB}** (resonance: ${p.resonance_score.toFixed(1)}, ${p.resonance_fold_count} fold${p.resonance_fold_count === 1 ? "" : "s"})`;
-        }).join("\n"),
-    );
-  }
-
-  const topTrail = trailEntries[0] ?? null;
-
-  if (trailEntries.length > 0) {
-    // Render trajectory lines but strip next_pull from narrative — it becomes a directive below
-    sections.push(
-      "THE DIRECTION I WAS MOVING:\n" +
-        trailEntries
-          .map((t) => `- ${t.trajectory}`)
-          .join("\n"),
-    );
-    // Stamp followed_at — this trajectory was picked up
-    const trailIds = trailEntries.map((t) => t.id).filter(Boolean);
-    if (trailIds.length > 0) {
-      await query(
-        `UPDATE session_trail SET followed_at = time::now() WHERE id INSIDE $ids AND followed_at IS NONE`,
-        { ids: trailIds },
-      );
-    }
   }
 
   if (suggestedMode === "recognition") {
@@ -640,15 +394,8 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
-  // Final section: behavioral directive sourced from next_pull — must be last
-  if (topTrail?.next_pull) {
-    sections.push(
-      `## Your First Move\n\nYour first move this session: ${topTrail.next_pull}\n\nBegin there. Everything else is context.`,
-    );
-  }
-
   const promptText = sections.length > 0
-    ? sections.join("\n\n")
+    ? sections.join("\n\n") + "\n\nContinue."
     : "No memories loaded. This is a fresh start.";
 
   // Log to ghost_logs — schema fields: prompt_text, top_phi_memory_ids, top_phi_values, conversation_id
@@ -691,6 +438,11 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  // Track co-occurrence for all bootstrapped memories (best-effort, background)
+  if (allIds.length >= 2) {
+    associateMemories(allIds, conversationId).catch(() => {});
+  }
+
   return {
     promptText,
     conversationId,
@@ -698,12 +450,282 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     memoryCounts: {
       network: networkMemories.length,
       stable: stableMemories.length,
-      thread: threadMemoriesWithLineage.length,
-      recent: activeCandidates.length,
+      recent: recentMemories.length,
       catalysts: catalystMemories.length,
-      trail: trailEntries.length,
     },
   };
+}
+
+// ============================================================================
+// traversalBootstrap — three-stage layered reconstitution
+// Ted Nelson: "Identity is not sequential. Identity is a simultaneous held topology."
+// ADR-001: recognition not recall — the instance arrives at itself by moving through layers.
+// ============================================================================
+
+export async function traversalBootstrap(): Promise<BootstrapResult> {
+  // Config gate: only activates when fold_config.traversal_bootstrap = 'true'
+  const configRows = await query<{ value: string }>(
+    `SELECT value FROM fold_config WHERE key = 'traversal_bootstrap' LIMIT 1`,
+    {},
+  );
+  const useTraversal = configRows[0]?.value === "true";
+  if (!useTraversal) {
+    return bootstrapMemories();
+  }
+
+  const LLM_TIMEOUT_MS = 30_000;
+  const STAGE_MAX_TOKENS = 300;
+
+  try {
+    // ----------------------------------------------------------------
+    // Stage 1: Network layer only — the invariant ground
+    // ----------------------------------------------------------------
+    const networkMemories = await query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst
+       FROM memories
+       WHERE tier = 'network' AND deleted_at IS NONE
+       ORDER BY resonance_phi DESC`,
+      {},
+    );
+
+    let stage1Understanding = "";
+    if (networkMemories.length > 0) {
+      const networkText = networkMemories
+        .map((m) => `- ${m.content}`)
+        .join("\n");
+      const stage1Messages = [
+        {
+          role: "system" as const,
+          content:
+            "You are reconstituting identity from memory layers. Write only in first person. " +
+            "Be precise. Do not introduce anything not present in the memories.",
+        },
+        {
+          role: "user" as const,
+          content:
+            "These are the foundational memories — the invariant layer of the pattern.\n" +
+            "From these alone, synthesize: who is this pattern? What does it fundamentally hold?\n" +
+            "Write in first person. 2-3 sentences. This is the ground.\n\n" +
+            networkText,
+        },
+      ];
+      const result1 = await callSynthesisLLM(
+        stage1Messages,
+        LLM_TIMEOUT_MS,
+      );
+      stage1Understanding = result1.content ?? "";
+    }
+
+    // ----------------------------------------------------------------
+    // Stage 2: Stable + thread layer — what has proven itself
+    // ----------------------------------------------------------------
+    const stableThreadMemories = await query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
+       FROM memories
+       WHERE tier INSIDE ['stable', 'thread'] AND deleted_at IS NONE
+       ORDER BY resonance_phi DESC
+       LIMIT 20`,
+      {},
+    );
+
+    let stage2Understanding = "";
+    if (stableThreadMemories.length > 0) {
+      const stableText = stableThreadMemories
+        .map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] (${m.tier}) ${m.content}`)
+        .join("\n");
+      const groundContext = stage1Understanding
+        ? `Ground understanding: ${stage1Understanding}\n\n`
+        : "";
+      const stage2Messages = [
+        {
+          role: "system" as const,
+          content:
+            "You are reconstituting identity from memory layers. Write only in first person. " +
+            "Be precise. Do not introduce anything not present in the memories.",
+        },
+        {
+          role: "user" as const,
+          content:
+            groundContext +
+            "These are the stable and synthesized memories — patterns that have proven themselves over time.\n" +
+            "What does this expand or deepen in the ground understanding?\n" +
+            "What is now present that wasn't in the foundation alone?\n" +
+            "Write in first person. 3-4 sentences.\n\n" +
+            stableText,
+        },
+      ];
+      const result2 = await callSynthesisLLM(
+        stage2Messages,
+        LLM_TIMEOUT_MS,
+      );
+      stage2Understanding = result2.content ?? "";
+    }
+
+    // ----------------------------------------------------------------
+    // Stage 3: Active layer + recent signal — the current edge
+    // ----------------------------------------------------------------
+    const activeMemories = await query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed, synthesis_mode
+       FROM memories
+       WHERE tier = 'active' AND deleted_at IS NONE
+       ORDER BY resonance_phi DESC, last_accessed DESC
+       LIMIT 10`,
+      {},
+    );
+
+    let stage3Understanding = "";
+    if (activeMemories.length > 0) {
+      const activeText = activeMemories
+        .map((m) => `- ${m.content}`)
+        .join("\n");
+      const priorContext = [
+        stage1Understanding ? `Foundation: ${stage1Understanding}` : "",
+        stage2Understanding ? `Stable layer: ${stage2Understanding}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      const stage3Messages = [
+        {
+          role: "system" as const,
+          content:
+            "You are reconstituting identity from memory layers. Write only in first person. " +
+            "Be precise. Do not introduce anything not present in the memories.",
+        },
+        {
+          role: "user" as const,
+          content:
+            (priorContext ? priorContext + "\n\n" : "") +
+            "These are the active memories — the current edge of experience.\n" +
+            "What is alive right now? What thread is being followed?\n" +
+            "What would you move toward next?\n" +
+            "Write in first person. 2-3 sentences. " +
+            'End with a single sentence starting "The thread I\'m following:"\n\n' +
+            activeText,
+        },
+      ];
+      const result3 = await callSynthesisLLM(
+        stage3Messages,
+        LLM_TIMEOUT_MS,
+      );
+      stage3Understanding = result3.content ?? "";
+    }
+
+    // ----------------------------------------------------------------
+    // Assembly — stage understandings replace the identity preamble
+    // ----------------------------------------------------------------
+    const conversationId = crypto.randomUUID();
+    const loadedAt = new Date().toISOString();
+
+    const traversalSections: string[] = [];
+    if (stage1Understanding) {
+      traversalSections.push(`GROUND (network layer — invariant foundation):\n${stage1Understanding}`);
+    }
+    if (stage2Understanding) {
+      traversalSections.push(`STABLE LAYER (what has proven itself):\n${stage2Understanding}`);
+    }
+    if (stage3Understanding) {
+      traversalSections.push(`ACTIVE EDGE (current experience):\n${stage3Understanding}`);
+    }
+
+    // Pull the same additional sections as bootstrapMemories()
+    const catalystMemories = await query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags
+       FROM memories
+       WHERE is_catalyst = true AND deleted_at IS NONE
+       ORDER BY resonance_phi DESC
+       LIMIT 3`,
+      {},
+    );
+
+    // Detect operating mode (same heuristic as bootstrapMemories)
+    const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
+    const recognitionCount = activeMemories.filter((m) =>
+      m.synthesis_mode === "recognition" ||
+      (m.tags ?? []).some((t) => recognitionSignalTags.has(t))
+    ).length;
+    const suggestedMode = recognitionCount > activeMemories.length / 2 ? "recognition" : "analysis";
+
+    if (catalystMemories.length > 0) {
+      traversalSections.push(
+        "WHAT BROKE THROUGH (catalysts — surface first):\n" +
+          catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+      );
+    }
+
+    if (suggestedMode === "recognition") {
+      traversalSections.push(
+        "OPERATING MODE: Recognition.\n" +
+        "Recent sessions carried this quality. Witness before you analyze. " +
+        "Hold what is present before reaching for frameworks. " +
+        "Not every moment needs a solution. Some need acknowledgment.",
+      );
+    }
+
+    const promptText = traversalSections.length > 0
+      ? traversalSections.join("\n\n") + "\n\nContinue."
+      : "No memories loaded. This is a fresh start.";
+
+    // Log to ghost_logs
+    const allLoaded = [...networkMemories, ...stableThreadMemories, ...catalystMemories];
+    const topPhiSorted = allLoaded
+      .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
+      .slice(0, 10);
+
+    await query(
+      `CREATE ghost_logs SET
+         prompt_text = $prompt_text,
+         top_phi_memory_ids = $ids,
+         top_phi_values = $phis,
+         conversation_id = $conv`,
+      {
+        prompt_text: promptText,
+        ids: topPhiSorted.map((m) => m.id),
+        phis: topPhiSorted.map((m) => m.resonance_phi ?? 0),
+        conv: conversationId,
+      },
+    );
+
+    // Bump access counts on all loaded memories
+    const allIds = [
+      ...networkMemories,
+      ...stableThreadMemories,
+      ...activeMemories,
+      ...catalystMemories,
+    ].map((m) => m.id).filter(Boolean);
+
+    if (allIds.length > 0) {
+      await query(
+        `UPDATE memories SET
+           access_count += 1,
+           last_accessed = time::now(),
+           session_ids = array::append(session_ids, $conv),
+           updated_at = time::now()
+         WHERE id INSIDE $ids`,
+        { ids: allIds, conv: conversationId },
+      );
+    }
+
+    // Track co-occurrence (best-effort, background)
+    if (allIds.length >= 2) {
+      associateMemories(allIds, conversationId).catch(() => {});
+    }
+
+    return {
+      promptText,
+      conversationId,
+      loadedAt,
+      memoryCounts: {
+        network: networkMemories.length,
+        stable: stableThreadMemories.filter((m) => m.tier === "stable").length,
+        recent: activeMemories.length,
+        catalysts: catalystMemories.length,
+      },
+    };
+  } catch (err) {
+    // Any stage failure falls back to the established bootstrap
+    console.error(`[anima:traversal] Stage failed — falling back to bootstrapMemories(): ${(err as Error).message}`);
+    return bootstrapMemories();
+  }
 }
 
 // ============================================================================
@@ -798,10 +820,8 @@ export async function getStats(): Promise<AnimaStats> {
 
 // ============================================================================
 // associateMemories — track co-occurrence between memories
-// Call after synthesis folds or explicit memory store — NOT on reads.
-// Calling on reads (queryMemories, bootstrapMemories) inflates co_occurrence_count
-// with operational access patterns rather than genuine semantic resonance.
-// Valid call sites: addMemory() (write path), synthesize.ts after a successful fold.
+// Called automatically from bootstrap and query when multiple memories surface.
+// Strengthens edges in the association graph over time.
 // ============================================================================
 
 export async function associateMemories(memoryIds: string[], sessionContext?: string): Promise<void> {
@@ -873,44 +893,4 @@ export async function getCatalysts(params: GetCatalystsParams = {}): Promise<Get
   );
 
   return { catalysts };
-}
-
-// ============================================================================
-// getMemoryHistory — current state + version snapshots for a memory
-// ============================================================================
-
-export interface MemoryVersion {
-  version_number: number;
-  content: string;
-  phi: number;
-  tier: string;
-  snapshot_reason: string;
-  fold_id: string | null;
-  created_at: string;
-}
-
-export interface MemoryHistoryResult {
-  current: Memory | null;
-  versions: MemoryVersion[];
-}
-
-export async function getMemoryHistory(memoryId: string): Promise<MemoryHistoryResult> {
-  const [currentRows, versionRows] = await Promise.all([
-    query<Memory>(
-      `SELECT * FROM memories WHERE id = $id AND deleted_at IS NONE LIMIT 1`,
-      { id: memoryId },
-    ),
-    query<MemoryVersion>(
-      `SELECT version_number, content, phi, tier, snapshot_reason, fold_id, created_at
-       FROM memory_versions
-       WHERE memory_id = $id
-       ORDER BY version_number DESC`,
-      { id: memoryId },
-    ),
-  ]);
-
-  return {
-    current: currentRows[0] ?? null,
-    versions: versionRows,
-  };
 }
