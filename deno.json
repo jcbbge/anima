@@ -1,6 +1,6 @@
 {
   "imports": {
-    "surrealdb": "npm:surrealdb@2.0.0-beta.2"
+    "surrealdb": "npm:surrealdb@2.0.2"
   },
   "tasks": {
     "mcp": "deno run --allow-net --allow-env --allow-read mcp-server/index.ts",

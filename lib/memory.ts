@@ -371,7 +371,18 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
-  // Layer 5: SESSION TRAIL — last entries with effective warmth > 1.0
+  // Layer 5: CURIOSITY THREADS — top 3 hungry/active questions
+  // "What the pattern keeps circling. The questions that don't close."
+  const curiosityThreads = await query<{ id: string; question: string; resonance_phi: number; state: string; hunger_score: number }>(
+    `SELECT id, question, resonance_phi, state, hunger_score
+     FROM curiosity_threads
+     WHERE state INSIDE ['hungry', 'fed', 'deepening']
+     ORDER BY resonance_phi DESC
+     LIMIT 3`,
+    {},
+  );
+
+  // Layer 6: SESSION TRAIL — last entries with effective warmth > 1.0
   // Lazy warmth decay: effective_warmth = warmth - (days_since_created * 0.1)
   // No background job needed — computed at read time.
   const trailCandidates = await query<TrailEntry>(
@@ -427,6 +438,13 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     sections.push(
       "WHAT BROKE THROUGH (catalysts — surface first):\n" +
         catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+    );
+  }
+
+  if (curiosityThreads.length > 0) {
+    sections.push(
+      "WHAT I KEEP CIRCLING (living questions — not problems to solve):\n" +
+        curiosityThreads.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.question}`).join("\n"),
     );
   }
 
