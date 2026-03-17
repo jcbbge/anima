@@ -42,6 +42,9 @@ DEFINE FIELD source          ON memories TYPE option<string>;
 DEFINE FIELD metadata        ON memories TYPE option<object>;
 DEFINE FIELD conversation_id ON memories TYPE option<string>;
 
+-- WATERMARK: When memory was last folded into synthesis
+DEFINE FIELD last_folded_at ON memories TYPE option<datetime>;
+
 DEFINE FIELD synthesis_mode ON memories TYPE option<string>
   ASSERT $value IS NONE OR $value INSIDE ['analysis', 'recognition', 'deepening'];
 
@@ -55,6 +58,7 @@ DEFINE INDEX memories_phi      ON memories FIELDS resonance_phi;
 DEFINE INDEX memories_catalyst ON memories FIELDS is_catalyst;
 DEFINE INDEX memories_tags     ON memories FIELDS tags;
 DEFINE INDEX memories_conf     ON memories FIELDS confidence;
+DEFINE INDEX memories_folded   ON memories FIELDS last_folded_at;
 
 DEFINE INDEX memories_hnsw ON memories
   FIELDS embedding
@@ -156,6 +160,7 @@ INSERT INTO fold_config [
   { key: 'search_confidence_weight',value: '0.1',                       description: 'confidence weight in hybrid search score' },
   { key: 'fold_model',              value: 'claude-haiku-4-5-20251001', description: 'LLM model for synthesis calls' },
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
+  { key: 'reflect_watermark_hours', value: '24',                        description: 'Hours before a folded memory can be re-selected for reflect synthesis' },
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' }
 ];
 
