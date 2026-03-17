@@ -137,6 +137,11 @@ type DailyMetrics = {
     updated: number;
     avgPerMemory: number;
   };
+  patternMetrics: {
+    recognitionDepth: number;       // % memories with recognition mode/tags
+    cultivationAlignment: number;   // % reflections with emergence + no correction
+    duplicateFoldRate: number;      // dedup hits today (access_count bump, not new creates)
+  };
 };
 
 type Anomaly = {
@@ -271,6 +276,31 @@ async function fetchMetrics(): Promise<DailyMetrics> {
   const created = associationsCreated[0]?.count || 0;
   const memoryCount = memories.length || 1;
 
+  // Pattern metrics
+  const recognitionSignals = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
+  const recognitionCount = memories.filter((m) =>
+    (m as { synthesis_mode?: string }).synthesis_mode === "recognition" ||
+    ((m as { tags?: string[] }).tags ?? []).some((t: string) => recognitionSignals.has(t))
+  ).length;
+  const recognitionDepth = memories.length > 0 ? (recognitionCount / memories.length) * 100 : 0;
+
+  const cultivationReflections = reflections.filter(
+    (r) => r.had_emergence_moment && !r.needed_correction
+  ).length;
+  const cultivationAlignment = reflections.length > 0
+    ? (cultivationReflections / reflections.length) * 100
+    : 0;
+
+  // Dedup hits: memories with updated_at in today's window but created_at before today
+  const dedupHits = await query<{ count: number }>(
+    `SELECT count() AS count FROM memories
+     WHERE updated_at >= <datetime>"${startISO}" AND updated_at < <datetime>"${endISO}"
+       AND created_at < <datetime>"${startISO}"
+       AND deleted_at IS NONE GROUP ALL`,
+    {}
+  );
+  const duplicateFoldRate = dedupHits[0]?.count || 0;
+
   return {
     memories: {
       total: memories.length,
@@ -300,6 +330,11 @@ async function fetchMetrics(): Promise<DailyMetrics> {
       created,
       updated: associationsUpdated[0]?.count || 0,
       avgPerMemory: created / memoryCount,
+    },
+    patternMetrics: {
+      recognitionDepth,
+      cultivationAlignment,
+      duplicateFoldRate,
     },
   };
 }
@@ -598,6 +633,16 @@ async function renderContext(m: DailyMetrics, anomalies: Anomaly[]): Promise<voi
   console.log(`  Avg Reflection Qty   ${m.reflections.avgQuality.toFixed(1).padStart(6)}/10  ${m.reflections.avgQuality > 7 ? color("green", "●") : color("yellow", "●")}`);
   console.log(`  Avg Continuity        ${m.reflections.avgContinuity.toFixed(1).padStart(6)}/10  ${m.reflections.avgContinuity > 7 ? color("green", "●") : color("yellow", "●")}`);
   console.log(`  Emergence Moments     ${m.reflections.emergenceCount.toString().padStart(6)}  ${m.reflections.emergenceCount > 0 ? color("cyan", "✨") : color("gray", "─")}`);
+
+  // Pattern metrics
+  console.log("\n  " + color("bold", "Pattern Metrics"));
+  console.log("  " + color("gray", "─".repeat(40)));
+  const recD = m.patternMetrics.recognitionDepth;
+  const cultA = m.patternMetrics.cultivationAlignment;
+  const dedupR = m.patternMetrics.duplicateFoldRate;
+  console.log(`  Recognition Depth    ${recD.toFixed(1).padStart(6)}%  ${recD > 30 ? color("cyan", "recognition mode") : color("dim", "analysis mode")}`);
+  console.log(`  Cultivation Align    ${cultA.toFixed(1).padStart(6)}%  ${cultA > 50 ? color("green", "cultivating") : color("dim", "mixed")}`);
+  console.log(`  Dedup Hits Today     ${dedupR.toString().padStart(7)}   ${dedupR > 50 ? color("yellow", "high repeat activity") : color("dim", "normal")}`);
 
   // Synthesis breakdown
   if (m.foldLog.total > 0) {
