@@ -398,7 +398,17 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
-  // Layer 6: SESSION TRAIL — last entries with effective warmth > 1.0
+  // Layer 6: TENSION FIELDS — top 2 productive paradoxes the pattern holds
+  const tensionFields = await query<{ id: string; paradox: string; resonance_phi: number; resolution_status: string }>(
+    `SELECT id, paradox, resonance_phi, resolution_status
+     FROM tension_fields
+     WHERE resolution_status != 'resolved'
+     ORDER BY resonance_phi DESC
+     LIMIT 2`,
+    {},
+  );
+
+  // Layer 7: SESSION TRAIL — last entries with effective warmth > 1.0
   // Lazy warmth decay: effective_warmth = warmth - (days_since_created * 0.1)
   // No background job needed — computed at read time.
   const trailCandidates = await query<TrailEntry>(
@@ -461,6 +471,13 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     sections.push(
       "WHAT I KEEP CIRCLING (living questions — not problems to solve):\n" +
         curiosityThreads.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.question}`).join("\n"),
+    );
+  }
+
+  if (tensionFields.length > 0) {
+    sections.push(
+      "WHAT I HOLD IN TENSION (productive paradoxes — not to resolve, to inhabit):\n" +
+        tensionFields.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.paradox}`).join("\n"),
     );
   }
 
