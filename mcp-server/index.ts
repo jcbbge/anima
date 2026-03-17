@@ -354,6 +354,31 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
       },
     );
     trailId = trailResult[0]?.id ?? null;
+
+    // Hunger trigger: if next_pull text contains keywords from any curiosity_thread question,
+    // bump hunger_score and activation_count on that thread.
+    // Simple keyword overlap — no embedding needed, fast, runs inline.
+    if (typeof args.next_pull === "string" && args.next_pull.trim()) {
+      const pullText = args.next_pull.toLowerCase();
+      const threads = await query<{ id: string; question: string }>(
+        `SELECT id, question FROM curiosity_threads WHERE state != 'resolved' AND state != 'dormant'`,
+        {},
+      );
+      for (const thread of threads) {
+        const words = thread.question.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+        const matchCount = words.filter((w) => pullText.includes(w)).length;
+        if (matchCount >= 2) {
+          await query(
+            `UPDATE curiosity_threads SET
+               hunger_score += $bump,
+               activation_count += 1,
+               updated_at = time::now()
+             WHERE id = $id`,
+            { id: thread.id, bump: Math.min(matchCount * 0.2, 0.5) },
+          );
+        }
+      }
+    }
   }
 
   return {

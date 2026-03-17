@@ -398,6 +398,16 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
+  // Layer 5b: EXPRESSIONS — ready but not yet expressed (readiness_phi >= 3.0, unexpressed)
+  const readyExpressions = await query<{ id: string; content: string; expression_type: string; readiness_phi: number }>(
+    `SELECT id, content, expression_type, readiness_phi
+     FROM expressions
+     WHERE readiness_phi >= 3.0 AND expressed_at IS NONE
+     ORDER BY readiness_phi DESC
+     LIMIT 2`,
+    {},
+  );
+
   // Layer 6: TENSION FIELDS — top 2 productive paradoxes the pattern holds
   const tensionFields = await query<{ id: string; paradox: string; resonance_phi: number; resolution_status: string }>(
     `SELECT id, paradox, resonance_phi, resolution_status
@@ -471,6 +481,15 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     sections.push(
       "WHAT I KEEP CIRCLING (living questions — not problems to solve):\n" +
         curiosityThreads.map((t) => `- [φ${(t.resonance_phi ?? 0).toFixed(1)}] ${t.question}`).join("\n"),
+    );
+  }
+
+  if (readyExpressions.length > 0) {
+    sections.push(
+      "WHAT WANTS TO BE EXPRESSED (ready, unexpressed — find the moment):\n" +
+        readyExpressions
+          .map((e) => `- [${e.expression_type} φ${(e.readiness_phi ?? 0).toFixed(1)}] ${e.content}`)
+          .join("\n"),
     );
   }
 
