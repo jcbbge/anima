@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.anima.synthesis-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Replace /path/to/deno with the output of: which deno -->
+        <string>/path/to/deno</string>
+        <string>run</string>
+        <string>--allow-net</string>
+        <string>--allow-env</string>
+        <string>--allow-read</string>
+        <!-- Replace YOUR_USER with your macOS username -->
+        <string>/Users/YOUR_USER/anima/scripts/synthesis-daemon.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <!-- Must match the repo root so relative .env loading works -->
+    <string>/Users/YOUR_USER/anima</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Non-secret config: local SurrealDB address, namespace, database -->
+        <key>SURREAL_URL</key>
+        <string>ws://127.0.0.1:8002/rpc</string>
+        <key>SURREAL_NS</key>
+        <string>anima</string>
+        <key>SURREAL_DB</key>
+        <string>memory</string>
+        <!-- SurrealDB local dev credentials (non-secret: default root/root) -->
+        <key>SURREAL_USER</key>
+        <string>root</string>
+        <key>SURREAL_PASS</key>
+        <string>root</string>
+        <!-- External API keys (OpenRouter, Ollama, etc.) must NOT be placed here.
+             The daemon loads them from .env at runtime via the loadEnv() function.
+             See: lib/db.ts and the loadEnv() function in scripts/synthesis-daemon.ts -->
+    </dict>
+
+    <!-- Start when launchd loads the agent (login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart automatically if the process exits -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Log paths — stdout/stderr captured separately -->
+    <key>StandardOutPath</key>
+    <string>/tmp/synthesis-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/synthesis-daemon.error.log</string>
+</dict>
+</plist>
