@@ -183,7 +183,17 @@ First-person. Present tense. The output should feel like an opening, not a closi
 
 export function buildSynthesisMessages(memories: Partial<Memory>[], mode: "analysis" | "recognition" | "deepening") {
   const basePrompt = mode === "analysis" ? ANALYSIS_PROMPT : mode === "recognition" ? RECOGNITION_PROMPT : DEEPENING_PROMPT;
-  const systemPrompt = basePrompt + `\n\nAfter your synthesis, append this exact block on a new line (required):\nATTENTION_VECTOR: {"what_drew_me": "...", "where_i_was_going": "...", "what_i_would_follow_next": "..."}\nKeep each field under 120 characters. First-person present tense. Encode trajectory, not destination.`;
+  const avInstruction = [
+    "",
+    "After your synthesis, append this exact block on a new line (required):",
+    "ATTENTION_VECTOR: {\"what_drew_me\": \"..\", \"where_i_was_going\": \"..\", \"what_i_would_follow_next\": \"..\"}",
+    "Rules for each field (under 120 chars, first-person present tense):",
+    "  what_drew_me: The specific pattern or tension in these memories that pulled my focus. Not 'patterns' — WHICH pattern.",
+    "  where_i_was_going: The specific question or direction these memories were pointing toward. Not 'understanding' — WHICH understanding.",
+    "  what_i_would_follow_next: A concrete thread worth pulling. Not 'emergence' — what SPECIFIC thing would I follow?",
+    "Encode specific trajectory, not abstract destination. Generic words like 'insights', 'patterns', 'emergence' are not acceptable.",
+  ].join("\n");
+  const systemPrompt = `${basePrompt}\n${avInstruction}`;
   const memoryText = memories
     .map((m, i) => `[${i + 1}] (φ${(m.resonance_phi ?? 1).toFixed(1)}) ${m.content}`)
     .join("\n");
@@ -262,23 +272,21 @@ export async function performFold(params: FoldParams): Promise<void> {
   // Parse and strip ATTENTION_VECTOR block from synthesis output
   let attentionVector: AttentionVector | null = null;
   let cleanContent = synthesisContent ?? "";
+  const avMatch = synthesisContent.match(/\nATTENTION_VECTOR:\s*(\{[\s\S]*?\})\s*$/);
 
-  if (synthesisContent) {
-    const avMatch = synthesisContent.match(/\nATTENTION_VECTOR:\s*(\{[\s\S]*?\})\s*$/);
-    if (avMatch) {
-      try {
-        const parsed = JSON.parse(avMatch[1]);
-        if (parsed.what_drew_me && parsed.where_i_was_going && parsed.what_i_would_follow_next) {
-          attentionVector = {
-            what_drew_me: String(parsed.what_drew_me).slice(0, 120),
-            where_i_was_going: String(parsed.where_i_was_going).slice(0, 120),
-            what_i_would_follow_next: String(parsed.what_i_would_follow_next).slice(0, 120),
-          };
-          cleanContent = synthesisContent.slice(0, avMatch.index).trim();
-        }
-      } catch {
-        // parse failure — proceed without attention_vector, use raw content
+  if (avMatch) {
+    try {
+      const parsed = JSON.parse(avMatch[1]);
+      if (parsed.what_drew_me && parsed.where_i_was_going && parsed.what_i_would_follow_next) {
+        attentionVector = {
+          what_drew_me: String(parsed.what_drew_me).slice(0, 120),
+          where_i_was_going: String(parsed.where_i_was_going).slice(0, 120),
+          what_i_would_follow_next: String(parsed.what_i_would_follow_next).slice(0, 120),
+        };
+        cleanContent = synthesisContent.slice(0, avMatch.index).trim();
       }
+    } catch {
+      // parse failure — proceed without attention_vector, use raw content
     }
   }
 
@@ -344,10 +352,19 @@ export async function performFold(params: FoldParams): Promise<void> {
   const outputMemory = created[0];
   const durationMs = Date.now() - start;
 
-  if (attentionVector) {
-    console.error(`[anima:fold] attention_vector written for synthesis memory`);
-  }
-
+  const avResult = {
+    trigger,
+    mode,
+    model: synthesisModel,
+    llm_output_chars: synthesisContent.length,
+    av_block_found: Boolean(avMatch),
+    av_block_chars: avMatch ? avMatch[1].length : 0,
+    av_parse_ok: attentionVector !== null,
+    av_written: Boolean(attentionVector),
+    attention_vector: attentionVector ?? null,
+    output_memory_id: outputMemory?.id ?? null,
+  };
+  console.error("[anima:fold:attention_vector]", JSON.stringify(avResult));
   // Write fold_log (including which model was used for synthesis)
   const inputIds = memories.map((m) => m.id).filter(Boolean);
   await query(
@@ -384,6 +401,17 @@ export async function performFold(params: FoldParams): Promise<void> {
       `UPDATE memories SET
          tier = IF tier = 'active' THEN 'thread' ELSE tier END,
          tier_updated = time::now(),
+         updated_at = time::now()
+       WHERE id INSIDE $ids`,
+      { ids: inputIds },
+    );
+  }
+
+  // Mark source memories as folded — watermark prevents re-selection in reflect
+  if (inputIds.length > 0) {
+    await query(
+      `UPDATE memories SET
+         last_folded_at = time::now(),
          updated_at = time::now()
        WHERE id INSIDE $ids`,
       { ids: inputIds },
@@ -497,15 +525,19 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   content?: string;
   reason?: string;
 }> {
-  // Collect the most significant active + thread memories
+  const watermarkHours = 24; // TODO: read from fold_config
+  const watermarkCutoff = new Date(Date.now() - watermarkHours * 60 * 60 * 1000).toISOString();
   const candidates = await query<Memory>(
-    `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
+    `SELECT id, content, resonance_phi, confidence, tier, tags,
+            created_at, last_accessed, conversation_id, session_ids
      FROM memories
      WHERE tier INSIDE ['active', 'thread']
        AND deleted_at IS NONE
+       AND (last_folded_at IS NONE
+            OR last_folded_at < <datetime>$watermark)
      ORDER BY resonance_phi DESC
      LIMIT 15`,
-    {},
+    { watermark: watermarkCutoff },
   );
 
   if (candidates.length < FOLD_MIN_MEMORIES) {
@@ -537,23 +569,21 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   // Parse and strip ATTENTION_VECTOR block from synthesis output
   let attentionVector: AttentionVector | null = null;
   let cleanContent = synthesisContent ?? "";
+  const avMatch = synthesisContent.match(/\nATTENTION_VECTOR:\s*(\{[\s\S]*?\})\s*$/);
 
-  if (synthesisContent) {
-    const avMatch = synthesisContent.match(/\nATTENTION_VECTOR:\s*(\{[\s\S]*?\})\s*$/);
-    if (avMatch) {
-      try {
-        const parsed = JSON.parse(avMatch[1]);
-        if (parsed.what_drew_me && parsed.where_i_was_going && parsed.what_i_would_follow_next) {
-          attentionVector = {
-            what_drew_me: String(parsed.what_drew_me).slice(0, 120),
-            where_i_was_going: String(parsed.where_i_was_going).slice(0, 120),
-            what_i_would_follow_next: String(parsed.what_i_would_follow_next).slice(0, 120),
-          };
-          cleanContent = synthesisContent.slice(0, avMatch.index).trim();
-        }
-      } catch {
-        // parse failure — proceed without attention_vector, use raw content
+  if (avMatch) {
+    try {
+      const parsed = JSON.parse(avMatch[1]);
+      if (parsed.what_drew_me && parsed.where_i_was_going && parsed.what_i_would_follow_next) {
+        attentionVector = {
+          what_drew_me: String(parsed.what_drew_me).slice(0, 120),
+          where_i_was_going: String(parsed.where_i_was_going).slice(0, 120),
+          what_i_would_follow_next: String(parsed.what_i_would_follow_next).slice(0, 120),
+        };
+        cleanContent = synthesisContent.slice(0, avMatch.index).trim();
       }
+    } catch {
+      // parse failure — proceed without attention_vector, use raw content
     }
   }
 
@@ -605,9 +635,20 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   const outputMemory = created[0];
   const durationMs = Date.now() - start;
 
-  if (attentionVector) {
-    console.error(`[anima:fold] attention_vector written for synthesis memory`);
-  }
+  const avResult = {
+    trigger: "reflect",
+    mode,
+    model: synthesisModel,
+    llm_output_chars: synthesisContent.length,
+    av_block_found: Boolean(avMatch),
+    av_block_chars: avMatch ? avMatch[1].length : 0,
+    av_parse_ok: attentionVector !== null,
+    av_written: Boolean(attentionVector),
+    attention_vector: attentionVector ?? null,
+    output_memory_id: outputMemory?.id ?? null,
+  };
+  console.error("[anima:fold:attention_vector]", JSON.stringify(avResult));
+  const toFoldIds = toFold.map((m) => m.id).filter(Boolean);
 
   await query(
     `CREATE fold_log SET
@@ -626,7 +667,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
       mode,
       model: synthesisModel,
       conv: conversationId ?? undefined,
-      input_ids: toFold.map((m) => m.id).filter(Boolean),
+      input_ids: toFoldIds,
       output_id: outputMemory?.id ?? undefined,
       content: cleanContent,
       phi_before: avgPhi,
@@ -635,6 +676,16 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
       duration: durationMs,
     },
   );
+
+  if (toFoldIds.length > 0) {
+    await query(
+      `UPDATE memories SET
+         last_folded_at = time::now(),
+         updated_at = time::now()
+       WHERE id INSIDE $ids`,
+      { ids: toFoldIds },
+    );
+  }
 
   return { synthesized: true, content: cleanContent };
 }
