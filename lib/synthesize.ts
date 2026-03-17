@@ -465,6 +465,69 @@ export async function performFold(params: FoldParams): Promise<void> {
     );
   }
 
+  // Snapshot pre-promotion state of input memories that will be tier-promoted
+  // Stored in memory_versions before tier changes so the pre-fold state is recoverable.
+  // Fire-and-forget: snapshot failure must never block the fold.
+  if (trigger !== "deepening" && inputIds.length > 0) {
+    try {
+      const foldLogRows = await query<{ id: string }>(
+        `SELECT id FROM fold_log WHERE output_memory_id = $output_id ORDER BY created_at DESC LIMIT 1`,
+        { output_id: outputMemory?.id ?? undefined },
+      );
+      const foldId = foldLogRows[0]?.id ?? null;
+
+      const currentStates = await query<{
+        id: string; content: string; resonance_phi: number; tier: string; tags: string[];
+        attention_vector: Record<string, unknown> | null; synthesis_count: number;
+      }>(
+        `SELECT id, content, resonance_phi, tier, tags, attention_vector, synthesis_count
+         FROM memories WHERE id INSIDE $ids AND deleted_at IS NONE`,
+        { ids: inputIds },
+      );
+
+      for (const mem of currentStates) {
+        // Only snapshot memories that will actually be promoted (synthesis_count already incremented)
+        const willPromote =
+          (mem.tier === "active" && (mem.synthesis_count ?? 0) >= 2) ||
+          (mem.tier === "stable" && ((mem.synthesis_count ?? 0) >= 5 || (mem.resonance_phi ?? 0) >= 4.0));
+
+        if (!willPromote) continue;
+
+        const versionRows = await query<{ cnt: number }>(
+          `SELECT count() AS cnt FROM memory_versions WHERE memory_id = $id GROUP ALL`,
+          { id: mem.id },
+        );
+        const versionNumber = (versionRows[0]?.cnt ?? 0) + 1;
+
+        await query(
+          `CREATE memory_versions SET
+             memory_id = $id,
+             version_number = $version_number,
+             content = $content,
+             phi = $phi,
+             tier = $tier,
+             tags = $tags,
+             attention_vector = $attention_vector,
+             fold_id = $fold_id,
+             snapshot_reason = 'pre_fold',
+             created_at = time::now()`,
+          {
+            id: mem.id,
+            version_number: versionNumber,
+            content: mem.content,
+            phi: mem.resonance_phi ?? 1.0,
+            tier: mem.tier,
+            tags: mem.tags ?? [],
+            attention_vector: mem.attention_vector ?? undefined,
+            fold_id: foldId ?? undefined,
+          },
+        );
+      }
+    } catch (snapErr) {
+      console.error(`[anima:fold] Snapshot failed (non-fatal): ${(snapErr as Error).message}`);
+    }
+  }
+
   // Tier promotion based on synthesis involvement (not access frequency)
   // active → stable: synthesis_count >= 2
   // stable → thread:  synthesis_count >= 5 OR output phi is high (phi_after >= 4.0)
@@ -503,6 +566,49 @@ export async function performFold(params: FoldParams): Promise<void> {
   const validInputIds = inputIds.filter((id): id is string => typeof id === "string");
   if (validInputIds.length >= 2) {
     associateMemories(validInputIds, conversationId).catch(() => {});
+  }
+
+  // Resonance scoring: if this fold was generative (phi_after > avgPhi of inputs),
+  // update association edges of input pairs with a resonance signal.
+  const phiDelta = synthesisPhi - avgPhi;
+  if (phiDelta > 0 && validInputIds.length >= 2) {
+    const resonanceDelta = Math.min(phiDelta * 0.3, 1.0);
+
+    // For large folds (N > 6), limit to pairs with highest existing strength
+    let pairsToUpdate: Array<[string, string]> = [];
+    if (validInputIds.length > 6) {
+      // Fetch existing associations sorted by strength and take top N*(N-1)/2 pairs (bounded)
+      const existingAssoc = await query<{ memory_a: string; memory_b: string; strength: number }>(
+        `SELECT memory_a, memory_b, strength
+         FROM memory_associations
+         WHERE memory_a INSIDE $ids AND memory_b INSIDE $ids
+         ORDER BY strength DESC
+         LIMIT 15`,
+        { ids: validInputIds },
+      ).catch(() => [] as Array<{ memory_a: string; memory_b: string; strength: number }>);
+      pairsToUpdate = existingAssoc.map((r) => [r.memory_a, r.memory_b]);
+    } else {
+      for (let i = 0; i < validInputIds.length; i++) {
+        for (let j = i + 1; j < validInputIds.length; j++) {
+          const a = validInputIds[i] < validInputIds[j] ? validInputIds[i] : validInputIds[j];
+          const b = validInputIds[i] < validInputIds[j] ? validInputIds[j] : validInputIds[i];
+          pairsToUpdate.push([a, b]);
+        }
+      }
+    }
+
+    for (const [a, b] of pairsToUpdate) {
+      query(
+        `UPDATE memory_associations SET
+           resonance_score = resonance_score + $delta,
+           resonance_fold_count = resonance_fold_count + 1,
+           updated_at = time::now()
+         WHERE (memory_a = $a AND memory_b = $b) OR (memory_a = $b AND memory_b = $a)`,
+        { delta: resonanceDelta, a, b },
+      ).catch(() => {});
+    }
+
+    console.error(`[anima:fold] Resonance scored — phiDelta: ${phiDelta.toFixed(2)}, delta: ${resonanceDelta.toFixed(3)}, pairs: ${pairsToUpdate.length}`);
   }
 
   console.error(

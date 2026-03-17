@@ -88,6 +88,31 @@ DEFINE FIELD created_at        ON fold_log TYPE datetime DEFAULT time::now();
 
 
 -- =====================================================
+-- MEMORY VERSIONS: Pre-fold state preservation
+-- Written before synthesis promotes a memory. Enables rollback if synthesis is contradicted.
+-- =====================================================
+DEFINE TABLE memory_versions SCHEMAFULL
+  PERMISSIONS
+    FOR select WHERE true
+    FOR create, update, delete WHERE $auth.id IS NOT NONE;
+
+DEFINE FIELD memory_id        ON memory_versions TYPE record<memories>;
+DEFINE FIELD version_number   ON memory_versions TYPE int;
+DEFINE FIELD content          ON memory_versions TYPE string;
+DEFINE FIELD phi               ON memory_versions TYPE float;
+DEFINE FIELD tier             ON memory_versions TYPE string
+  ASSERT $value INSIDE ['active', 'stable', 'thread', 'network'];
+DEFINE FIELD tags             ON memory_versions TYPE array DEFAULT [];
+DEFINE FIELD attention_vector ON memory_versions FLEXIBLE TYPE option<object>;
+DEFINE FIELD fold_id          ON memory_versions TYPE option<record<fold_log>>;
+DEFINE FIELD snapshot_reason  ON memory_versions TYPE string
+  ASSERT $value INSIDE ['pre_fold', 'pre_update', 'manual'];
+DEFINE FIELD created_at       ON memory_versions TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX idx_memory_versions_memory ON memory_versions FIELDS memory_id;
+
+
+-- =====================================================
 -- GHOST LOGS: Handshake history
 -- =====================================================
 DEFINE TABLE ghost_logs SCHEMAFULL;
@@ -130,6 +155,8 @@ DEFINE FIELD memory_b            ON memory_associations TYPE record<memories> RE
 DEFINE FIELD strength            ON memory_associations TYPE float DEFAULT 1.0;
 DEFINE FIELD co_occurrence_count ON memory_associations TYPE int DEFAULT 1;
 DEFINE FIELD session_contexts    ON memory_associations TYPE array DEFAULT [];
+DEFINE FIELD resonance_score      ON memory_associations TYPE float DEFAULT 0.0;
+DEFINE FIELD resonance_fold_count ON memory_associations TYPE int DEFAULT 0;
 DEFINE FIELD created_at          ON memory_associations TYPE datetime DEFAULT time::now();
 DEFINE FIELD updated_at          ON memory_associations TYPE datetime DEFAULT time::now();
 DEFINE INDEX assoc_pair ON memory_associations FIELDS memory_a, memory_b UNIQUE;

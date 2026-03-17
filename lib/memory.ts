@@ -323,14 +323,6 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
     );
   }
 
-  // Track co-occurrence for all surfaced memories (best-effort, background)
-  // Only associate when conversation_id is present — contextless queries are retrievals,
-  // not episodic encounters. Without context, associations have no provenance.
-  if (conversation_id && memories.length >= 2) {
-    const ids = memories.map((m) => m.id).filter(Boolean) as string[];
-    associateMemories(ids, conversation_id).catch(() => {});
-  }
-
   return { memories, queryTimeMs: Date.now() - start };
 }
 
@@ -474,6 +466,42 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     {},
   );
 
+  // Layer 6b: RESONANT PAIRS — top 3 association pairs with highest resonance_score
+  // These combinations have proven generative — held together they produce synthesis.
+  const resonantPairRows = await query<{ memory_a: string; memory_b: string; resonance_score: number; resonance_fold_count: number; strength: number }>(
+    `SELECT memory_a, memory_b, resonance_score, resonance_fold_count, strength
+     FROM memory_associations
+     WHERE resonance_score > 0
+     ORDER BY resonance_score DESC
+     LIMIT 3`,
+    {},
+  );
+
+  // Fetch content for both sides of each resonant pair
+  interface ResonantPair {
+    contentA: string;
+    contentB: string;
+    resonance_score: number;
+    resonance_fold_count: number;
+  }
+  const resonantPairs: ResonantPair[] = [];
+  for (const row of resonantPairRows) {
+    const mems = await query<{ id: string; content: string }>(
+      `SELECT id, content FROM memories WHERE id INSIDE $ids AND deleted_at IS NONE`,
+      { ids: [row.memory_a, row.memory_b] },
+    ).catch(() => [] as Array<{ id: string; content: string }>);
+    const memA = mems.find((m) => m.id === row.memory_a);
+    const memB = mems.find((m) => m.id === row.memory_b);
+    if (memA && memB) {
+      resonantPairs.push({
+        contentA: memA.content,
+        contentB: memB.content,
+        resonance_score: row.resonance_score,
+        resonance_fold_count: row.resonance_fold_count,
+      });
+    }
+  }
+
   // Layer 7: SESSION TRAIL — last entries with effective warmth > 1.0
   // Lazy warmth decay: effective_warmth = warmth - (days_since_created * 0.1)
   // No background job needed — computed at read time.
@@ -572,6 +600,17 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  if (resonantPairs.length > 0) {
+    sections.push(
+      "## Resonant Pairs\n\nThese combinations have proven generative — held together they produce synthesis.\n\n" +
+        resonantPairs.map((p) => {
+          const snipA = p.contentA.slice(0, 80) + (p.contentA.length > 80 ? "…" : "");
+          const snipB = p.contentB.slice(0, 80) + (p.contentB.length > 80 ? "…" : "");
+          return `- **${snipA}** ↔ **${snipB}** (resonance: ${p.resonance_score.toFixed(1)}, ${p.resonance_fold_count} fold${p.resonance_fold_count === 1 ? "" : "s"})`;
+        }).join("\n"),
+    );
+  }
+
   const topTrail = trailEntries[0] ?? null;
 
   if (trailEntries.length > 0) {
@@ -650,11 +689,6 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
        WHERE id INSIDE $ids`,
       { ids: allIds, conv: conversationId },
     );
-  }
-
-  // Track co-occurrence for all bootstrapped memories (best-effort, background)
-  if (allIds.length >= 2) {
-    associateMemories(allIds, conversationId).catch(() => {});
   }
 
   return {
@@ -764,8 +798,10 @@ export async function getStats(): Promise<AnimaStats> {
 
 // ============================================================================
 // associateMemories — track co-occurrence between memories
-// Called automatically from bootstrap and query when multiple memories surface.
-// Strengthens edges in the association graph over time.
+// Call after synthesis folds or explicit memory store — NOT on reads.
+// Calling on reads (queryMemories, bootstrapMemories) inflates co_occurrence_count
+// with operational access patterns rather than genuine semantic resonance.
+// Valid call sites: addMemory() (write path), synthesize.ts after a successful fold.
 // ============================================================================
 
 export async function associateMemories(memoryIds: string[], sessionContext?: string): Promise<void> {
@@ -837,4 +873,44 @@ export async function getCatalysts(params: GetCatalystsParams = {}): Promise<Get
   );
 
   return { catalysts };
+}
+
+// ============================================================================
+// getMemoryHistory — current state + version snapshots for a memory
+// ============================================================================
+
+export interface MemoryVersion {
+  version_number: number;
+  content: string;
+  phi: number;
+  tier: string;
+  snapshot_reason: string;
+  fold_id: string | null;
+  created_at: string;
+}
+
+export interface MemoryHistoryResult {
+  current: Memory | null;
+  versions: MemoryVersion[];
+}
+
+export async function getMemoryHistory(memoryId: string): Promise<MemoryHistoryResult> {
+  const [currentRows, versionRows] = await Promise.all([
+    query<Memory>(
+      `SELECT * FROM memories WHERE id = $id AND deleted_at IS NONE LIMIT 1`,
+      { id: memoryId },
+    ),
+    query<MemoryVersion>(
+      `SELECT version_number, content, phi, tier, snapshot_reason, fold_id, created_at
+       FROM memory_versions
+       WHERE memory_id = $id
+       ORDER BY version_number DESC`,
+      { id: memoryId },
+    ),
+  ]);
+
+  return {
+    current: currentRows[0] ?? null,
+    versions: versionRows,
+  };
 }
