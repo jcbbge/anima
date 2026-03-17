@@ -86,6 +86,7 @@ export interface QueryMemoriesParams {
   limit?: number;
   tiers?: string[];
   conversation_id?: string;
+  hybrid?: boolean;
 }
 
 export interface ScoredMemory extends Partial<Memory> {
@@ -205,7 +206,7 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
 // ============================================================================
 
 export async function queryMemories(params: QueryMemoriesParams): Promise<QueryMemoriesResult> {
-  const { query: queryText, limit = 20, tiers, conversation_id } = params;
+  const { query: queryText, limit = 20, tiers, conversation_id, hybrid = false } = params;
   const start = Date.now();
 
   const embedding = await generateEmbedding(queryText);
@@ -213,24 +214,81 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
     return { memories: [], queryTimeMs: Date.now() - start };
   }
 
-  // ANN vector search with HNSW — <|k, ef|> syntax (k=results, ef=search width)
-  // Filter embedding IS NOT NONE to skip records stored without embeddings
-  let surql = `SELECT *, vector::similarity::cosine(embedding, $vec) AS similarity
-    FROM memories
-    WHERE embedding <|${limit}, 40|> $vec
-      AND embedding IS NOT NONE
-      AND deleted_at IS NONE`;
+  let raw: Array<Memory & { similarity: number }>;
 
-  if (tiers && tiers.length > 0) {
-    surql += ` AND tier INSIDE $tiers`;
+  if (hybrid) {
+    // ── Hybrid path: vector ANN + BM25 full-text, merged with Reciprocal Rank Fusion ──
+    // Vector candidates (2× limit for fusion headroom)
+    let vecSurql = `SELECT *, vector::similarity::cosine(embedding, $vec) AS similarity
+      FROM memories
+      WHERE embedding <|${limit * 2}, 60|> $vec
+        AND embedding IS NOT NONE
+        AND deleted_at IS NONE`;
+    if (tiers && tiers.length > 0) vecSurql += ` AND tier INSIDE $tiers`;
+    vecSurql += ` ORDER BY similarity DESC`;
+
+    const vecResults = await query<Memory & { similarity: number }>(vecSurql, {
+      vec: embedding,
+      ...(tiers ? { tiers } : {}),
+    });
+
+    // BM25 text candidates (use query text as search terms)
+    let txtSurql = `SELECT *, search::score() AS _text_score
+      FROM memories
+      WHERE content @@ $terms
+        AND deleted_at IS NONE`;
+    if (tiers && tiers.length > 0) txtSurql += ` AND tier INSIDE $tiers`;
+    txtSurql += ` ORDER BY search::score() DESC LIMIT ${limit * 2}`;
+
+    const txtResults = await query<Memory & { similarity: number; _text_score: number }>(txtSurql, {
+      terms: queryText,
+      ...(tiers ? { tiers } : {}),
+    });
+
+    // Reciprocal Rank Fusion: score(d) = Σ 1/(rank + 60)
+    const RRF_K = 60;
+    const rrfScores = new Map<string, number>();
+    const byId = new Map<string, Memory & { similarity: number }>();
+
+    vecResults.forEach((m, rank) => {
+      if (!m.id) return;
+      rrfScores.set(m.id, (rrfScores.get(m.id) ?? 0) + 1 / (rank + RRF_K));
+      byId.set(m.id, m);
+    });
+    txtResults.forEach((m, rank) => {
+      if (!m.id) return;
+      rrfScores.set(m.id, (rrfScores.get(m.id) ?? 0) + 1 / (rank + RRF_K));
+      if (!byId.has(m.id)) byId.set(m.id, { ...m, similarity: 0 });
+    });
+
+    // Sort by RRF score descending, take top `limit`
+    const sorted = [...rrfScores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([id]) => byId.get(id)!);
+
+    raw = sorted;
+  } else {
+    // ── Standard vector-only path (default) ──
+    // ANN vector search with HNSW — <|k, ef|> syntax (k=results, ef=search width)
+    // Filter embedding IS NOT NONE to skip records stored without embeddings
+    let surql = `SELECT *, vector::similarity::cosine(embedding, $vec) AS similarity
+      FROM memories
+      WHERE embedding <|${limit}, 60|> $vec
+        AND embedding IS NOT NONE
+        AND deleted_at IS NONE`;
+
+    if (tiers && tiers.length > 0) {
+      surql += ` AND tier INSIDE $tiers`;
+    }
+
+    surql += ` ORDER BY similarity DESC`;
+
+    raw = await query<Memory & { similarity: number }>(surql, {
+      vec: embedding,
+      ...(tiers ? { tiers } : {}),
+    });
   }
-
-  surql += ` ORDER BY similarity DESC`;
-
-  const raw = await query<Memory & { similarity: number }>(surql, {
-    vec: embedding,
-    ...(tiers ? { tiers } : {}),
-  });
 
   // Apply phi-weighted scoring: score = (cosine * 0.7) + ((phi / 5.0) * 0.3)
   const memories: ScoredMemory[] = raw.map((m) => ({

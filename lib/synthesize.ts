@@ -79,7 +79,7 @@ async function checkConflictPressure(
   const rows = await query<{ id: string; similarity: number }>(
     `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
      FROM memories
-     WHERE embedding <|5, 40|> $vec
+     WHERE embedding <|5, 100|> $vec
        AND embedding IS NOT NONE
        AND id != $id
        AND deleted_at IS NONE`,
@@ -680,7 +680,7 @@ export async function checkAndSynthesize(
       memories = await query<Memory>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at
          FROM memories
-         WHERE embedding <|10, 40|> $vec
+         WHERE embedding <|10, 100|> $vec
            AND embedding IS NOT NONE
            AND deleted_at IS NONE
          ORDER BY resonance_phi DESC`,

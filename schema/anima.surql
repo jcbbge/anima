@@ -60,6 +60,15 @@ DEFINE INDEX memories_hnsw ON memories
   FIELDS embedding
   HNSW DIMENSION 768 DIST COSINE TYPE F32;
 
+-- Full-text search index for BM25 hybrid retrieval
+DEFINE ANALYZER IF NOT EXISTS memory_content_analyzer
+  TOKENIZER class
+  FILTERS lowercase, snowball(english);
+
+DEFINE INDEX IF NOT EXISTS memories_content_ft ON memories
+  FIELDS content
+  SEARCH ANALYZER memory_content_analyzer BM25(1.2, 0.75);
+
 
 -- =====================================================
 -- FOLD LOG: Synthesis audit trail
@@ -157,7 +166,8 @@ INSERT INTO fold_config [
   { key: 'fold_model',              value: 'claude-haiku-4-5-20251001', description: 'LLM model for synthesis calls' },
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
-  { key: 'traversal_bootstrap',     value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' }
+  { key: 'traversal_bootstrap',     value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
+  { key: 'pending_synthesis',       value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' }
 ];
 
 
@@ -276,3 +286,108 @@ DEFINE INDEX expressions_phi       ON expressions FIELDS readiness_phi;
 
 DEFINE FIELD related_curiosity ON memories TYPE option<record<curiosity_threads>>;
 DEFINE FIELD related_tension   ON memories TYPE option<record<tension_fields>>;
+
+
+-- =====================================================
+-- DB-LAYER INTELLIGENCE: Functions, Events, Views
+-- Added 2026-03-17
+-- Moves phi-threshold checks and tier promotion from
+-- TypeScript application code to SurrealDB layer so all
+-- callers benefit without extra round-trips.
+-- =====================================================
+
+-- synthesis_count is written by performFold() — define it here so
+-- the SCHEMAFULL memories table accepts the field and events can read it.
+DEFINE FIELD IF NOT EXISTS synthesis_count ON memories TYPE int DEFAULT 0;
+
+
+-- =====================================================
+-- FUNCTIONS: Reusable phi aggregates
+-- =====================================================
+
+-- Total resonance_phi across all active, non-deleted memories.
+-- Callable from events, queries, and application code.
+DEFINE FUNCTION IF NOT EXISTS fn::active_phi_total() -> float {
+  RETURN (
+    SELECT math::sum(resonance_phi) AS s
+    FROM memories
+    WHERE tier = 'active' AND deleted_at IS NONE
+    GROUP ALL
+  )[0].s ?? 0.0;
+};
+
+-- Returns true when active phi exceeds the given threshold.
+DEFINE FUNCTION IF NOT EXISTS fn::synthesis_pressure_exceeded(threshold: float) -> bool {
+  RETURN fn::active_phi_total() > threshold;
+};
+
+
+-- =====================================================
+-- EVENT: phi_watermark — signal synthesis daemon
+-- Fires async on every new active-tier memory creation.
+-- Writes a pending:<phi_total> watermark to fold_config
+-- only when phi exceeds threshold and no pending already set.
+-- =====================================================
+
+DEFINE EVENT IF NOT EXISTS phi_watermark ON TABLE memories
+  ASYNC RETRY 2
+  WHEN $event = "CREATE" AND $after.tier = 'active' AND $after.deleted_at IS NONE
+  THEN {
+    LET $total = fn::active_phi_total();
+    IF $total > 15.0 {
+      UPDATE fold_config SET value = string::concat('pending:', string($total)), updated_at = time::now()
+        WHERE key = 'pending_synthesis' AND (
+          value IS NONE OR
+          value = 'idle' OR
+          NOT string::starts_with(value, 'pending:')
+        );
+    };
+  };
+
+
+-- =====================================================
+-- EVENT: tier_promote — DB-layer tier promotion
+-- Mirrors the promotion logic in performFold() so any
+-- synthesis_count increment triggers promotion automatically.
+-- active → stable: synthesis_count >= 2
+-- stable → thread:  synthesis_count >= 5 OR resonance_phi >= 4.0
+-- =====================================================
+
+DEFINE EVENT IF NOT EXISTS tier_promote ON TABLE memories
+  ASYNC
+  WHEN $event = "UPDATE"
+    AND $after.synthesis_count != $before.synthesis_count
+    AND $after.deleted_at IS NONE
+  THEN {
+    IF $after.tier = 'active' AND $after.synthesis_count >= 2 {
+      UPDATE memories SET
+        tier = 'stable',
+        tier_updated = time::now(),
+        updated_at = time::now()
+      WHERE id = $after.id;
+    } ELSE IF $after.tier = 'stable' AND (
+      $after.synthesis_count >= 5 OR $after.resonance_phi >= 4.0
+    ) {
+      UPDATE memories SET
+        tier = 'thread',
+        tier_updated = time::now(),
+        updated_at = time::now()
+      WHERE id = $after.id;
+    };
+  };
+
+
+-- =====================================================
+-- TABLE VIEW: phi_summary — materialized phi aggregate
+-- Poll this table for current active phi instead of running
+-- a full aggregate query on the memories table each time.
+-- SurrealDB recomputes this view incrementally on changes.
+-- =====================================================
+
+DEFINE TABLE IF NOT EXISTS phi_summary OVERWRITE
+  AS SELECT
+    math::sum(resonance_phi) AS total_phi,
+    count() AS active_memory_count
+  FROM memories
+  WHERE tier = 'active' AND deleted_at IS NONE
+  GROUP ALL;
