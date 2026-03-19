@@ -462,6 +462,7 @@ DEFINE FIELD IF NOT EXISTS tier            ON memory_versions TYPE string;
 DEFINE FIELD IF NOT EXISTS tags            ON memory_versions TYPE array DEFAULT [];
 DEFINE FIELD IF NOT EXISTS attention_vector ON memory_versions TYPE option<object>;
 DEFINE FIELD fold_id                       ON memory_versions TYPE option<record<fold_log>>;
+DEFINE FIELD memory_id                     ON memory_versions TYPE option<record<memories>>;
 DEFINE FIELD IF NOT EXISTS snapshot_reason ON memory_versions TYPE string DEFAULT 'pre_fold';
 DEFINE FIELD IF NOT EXISTS created_at      ON memory_versions TYPE datetime DEFAULT time::now();
 
