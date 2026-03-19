@@ -1076,7 +1076,7 @@ export async function getStats(): Promise<AnimaStats> {
   ]);
 
   const foldCountRows = await query<{ count: number }>(
-    `SELECT count() AS count FROM fold_log`,
+    `SELECT count() AS count FROM fold_log GROUP ALL`,
     {},
   );
 

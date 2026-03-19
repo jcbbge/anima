@@ -42,6 +42,12 @@ export type DailyMetrics = {
     updated: number;
     avgPerMemory: number;
   };
+  trail: {
+    total: number;
+    avgWarmth: number;
+    latestTrajectory: string | null;
+    latestNextPull: string | null;
+  };
 };
 
 export type Anomaly = {
@@ -204,6 +210,24 @@ export async function fetchMetrics(startISO: string, endISO: string): Promise<Da
     {}
   );
 
+  const trails = await query<{
+    warmth: number;
+    trajectory: string;
+    next_pull: string | null;
+    created_at: string;
+  }>(
+    `SELECT warmth, trajectory, next_pull, created_at
+     FROM session_trail
+     WHERE created_at >= <datetime>"${startISO}" AND created_at < <datetime>"${endISO}"
+     ORDER BY created_at DESC`,
+    {},
+  );
+
+  let totalWarmth = 0;
+  for (const t of trails) {
+    if (t.warmth) totalWarmth += t.warmth;
+  }
+
   const created = associationsCreated[0]?.count || 0;
   const memoryCount = memories.length || 1;
 
@@ -236,6 +260,12 @@ export async function fetchMetrics(startISO: string, endISO: string): Promise<Da
       created,
       updated: associationsUpdated[0]?.count || 0,
       avgPerMemory: created / memoryCount,
+    },
+    trail: {
+      total: trails.length,
+      avgWarmth: trails.length ? totalWarmth / trails.length : 0,
+      latestTrajectory: trails[0]?.trajectory ?? null,
+      latestNextPull: trails[0]?.next_pull ?? null,
     },
   };
 }
@@ -569,8 +599,21 @@ async function renderContext(m: DailyMetrics, anomalies: Anomaly[], targetDate: 
     out(`  New associations      ${m.associations.created.toLocaleString().padStart(6)}`);
     out(`  Strengthened          ${m.associations.updated.toLocaleString().padStart(6)}`);
     out(`  Per memory ratio      ${m.associations.avgPerMemory.toFixed(1).padStart(6)}x`);
-    if (m.associations.avgPerMemory > 50) {
-      out(color("yellow", "  ⚠ High ratio suggests tag explosion or bulk operation", noColor));
+  }
+
+  if (m.trail.total > 0) {
+    out("\n  " + color("bold", "Navigation (Session Trail)", noColor));
+    out("  " + color("gray", "─".repeat(40), noColor));
+    out(`  Trails written        ${m.trail.total.toString().padStart(6)}`);
+    out(`  Avg warmth            ${m.trail.avgWarmth.toFixed(1).padStart(6)}/5`);
+    if (m.trail.latestTrajectory) {
+      const truncated = m.trail.latestTrajectory.length > 80
+        ? m.trail.latestTrajectory.slice(0, 77) + "…"
+        : m.trail.latestTrajectory;
+      out(`  Latest trajectory: ${color("cyan", truncated, noColor)}`);
+    }
+    if (m.trail.latestNextPull) {
+      out(`  Next pull: ${color("cyan", m.trail.latestNextPull.slice(0, 60), noColor)}`);
     }
   }
 

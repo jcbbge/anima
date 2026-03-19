@@ -22,7 +22,8 @@
 await loadEnv();
 
 import { getDb, closeDb, query } from "../lib/db.ts";
-import { checkAndSynthesize } from "../lib/synthesize.ts";
+import { performFold } from "../lib/synthesize.ts";
+import type { Memory } from "../lib/memory.ts";
 import { Table } from "surrealdb";
 
 // ============================================================================
@@ -59,26 +60,6 @@ const log = (msg: string) => console.error(`[anima:synthesis-daemon] ${msg}`);
 let synthesisRunning = false;
 
 // ============================================================================
-// Fetch trigger embedding — most recent active-tier memory embedding
-// ============================================================================
-
-async function fetchTriggerEmbedding(): Promise<number[] | null> {
-  try {
-    const rows = await query<{ embedding: number[] }>(
-      `SELECT embedding, created_at FROM memories
-       WHERE tier = 'active' AND deleted_at IS NONE AND embedding IS NOT NONE
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      {},
-    );
-    return rows[0]?.embedding ?? null;
-  } catch (err) {
-    log(`Failed to fetch trigger embedding: ${(err as Error).message}`);
-    return null;
-  }
-}
-
-// ============================================================================
 // Set the pending_synthesis watermark value
 // ============================================================================
 
@@ -110,12 +91,21 @@ async function dispatchFold(): Promise<void> {
   await setWatermark("running");
 
   try {
-    const embedding = await fetchTriggerEmbedding();
+    const recentCutoff = new Date(Date.now() - (30 * 60 * 1000)).toISOString();
+    const memories = await query<Memory>(
+      `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
+       FROM memories
+       WHERE tier = 'active' AND deleted_at IS NONE
+       AND (last_folded_at IS NONE OR last_folded_at < <datetime>$cutoff)
+       ORDER BY resonance_phi DESC`,
+      { cutoff: recentCutoff }
+    );
 
-    // checkAndSynthesize expects (newMemoryId, newEmbedding, conversationId)
-    // We use a sentinel ID — the daemon trigger is not tied to a specific memory.
-    // conversationId is omitted: phi watermark is a cross-conversation pressure event.
-    await checkAndSynthesize("__synthesis-daemon__", embedding, undefined);
+    if (memories.length >= 3) {
+      await performFold({ trigger: "phi_threshold", memories, conversationId: undefined });
+    } else {
+      log(`Not enough active memories for fold (${memories.length} < 3) — resetting watermark`);
+    }
 
     log("Fold complete — resetting watermark to 'idle'");
     await setWatermark("idle");

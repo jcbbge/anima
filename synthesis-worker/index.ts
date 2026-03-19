@@ -149,7 +149,7 @@ async function handleNewMemory(record: MemoryLiveRecord): Promise<void> {
 
   synthesisRunning = true;
   try {
-    await checkAndSynthesize(idStr, embeddingVec, conversation_id);
+    await checkAndSynthesize(idStr, embeddingVec, conversation_id, { skipPhi: true });
   } finally {
     synthesisRunning = false;
   }
@@ -207,7 +207,7 @@ async function runOnce(): Promise<void> {
     // Use a sentinel memory ID — phi trigger doesn't need a specific new memory
     synthesisRunning = true;
     try {
-      await checkAndSynthesize("__worker_once__", null, undefined);
+      await checkAndSynthesize("__worker_once__", null, undefined, { skipPhi: true });
     } finally {
       synthesisRunning = false;
     }

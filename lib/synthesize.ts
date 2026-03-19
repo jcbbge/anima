@@ -40,9 +40,6 @@ const CLUSTER_SIZE = 3;             // Memories in window before cluster fires
 const CLUSTER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const FOLD_MIN_MEMORIES = 3;        // Don't fold if fewer than this
 const LLM_TIMEOUT_MS = 30_000;      // qwen is fast but give it room
-// Bug 2 guard: exclude memories folded within this window from phi pressure checks
-// Prevents re-synthesis loops when tier_promote async event hasn't fired yet.
-const RECENTLY_FOLDED_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 // Secondary dedup net: suppress synthesis output if cosine > threshold vs recent thread-tier syntheses
 const SEMANTIC_DEDUP_THRESHOLD = 0.92;
 
@@ -69,6 +66,10 @@ async function checkPhiPressure(): Promise<{ triggered: boolean; total: number }
   // takes an array literal, not a field path across rows.
   // Bug 2 guard: exclude memories folded within RECENTLY_FOLDED_WINDOW_MS to prevent
   // re-synthesis loops when tier_promote async event hasn't fired yet.
+  const windowRow = await query<{ value: string }>(
+    "SELECT `value` FROM fold_config WHERE key = 'recently_folded_window_minutes' LIMIT 1"
+  );
+  const RECENTLY_FOLDED_WINDOW_MS = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
   const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
   const rows = await query<{ resonance_phi: number }>(
     `SELECT resonance_phi FROM memories
@@ -672,6 +673,7 @@ export async function checkAndSynthesize(
   newMemoryId: string,
   newEmbedding: number[] | null,
   conversationId?: string,
+  options?: { skipPhi?: boolean },
 ): Promise<void> {
   // Backpressure guard — one synthesis at a time
   if (synthesisRunning) {
@@ -683,7 +685,9 @@ export async function checkAndSynthesize(
   try {
     // Run pressure checks (parallel where independent)
     const [phiResult, clusterResult, deepeningResult] = await Promise.all([
-      checkPhiPressure(),
+      options?.skipPhi
+        ? Promise.resolve({ triggered: false, total: 0 })
+        : checkPhiPressure(),
       newEmbedding ? checkClusterPressure(newEmbedding) : Promise.resolve({ triggered: false, count: 0 }),
       newEmbedding ? checkDeepeningPressure(newEmbedding) : Promise.resolve<DeepeningResult>({ triggered: false }),
     ]);
@@ -717,6 +721,10 @@ export async function checkAndSynthesize(
     if (trigger === "phi_threshold") {
       // Active-tier memories, excluding recently folded — same cutoff as checkPhiPressure().
       // Input-side guard so we never even send recently-folded memories to the LLM.
+      const windowRow = await query<{ value: string }>(
+        "SELECT `value` FROM fold_config WHERE key = 'recently_folded_window_minutes' LIMIT 1"
+      );
+      const RECENTLY_FOLDED_WINDOW_MS = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
       const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
       memories = await query<Memory>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed

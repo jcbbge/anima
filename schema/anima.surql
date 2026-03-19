@@ -194,6 +194,7 @@ INSERT INTO fold_config [
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
   { key: 'traversal_bootstrap',            value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
   { key: 'pending_synthesis',              value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
+  { key: 'recently_folded_window_minutes', value: '30',                        description: 'Minutes after a fold fires before the same memories are eligible for re-synthesis. Guards against re-synthesis loops.' },
   { key: 'expression_readiness_threshold', value: '3.0',                       description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
   { key: 'curiosity_hunger_threshold',     value: '5.0',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
 ];
@@ -460,7 +461,7 @@ DEFINE FIELD IF NOT EXISTS phi             ON memory_versions TYPE float;
 DEFINE FIELD IF NOT EXISTS tier            ON memory_versions TYPE string;
 DEFINE FIELD IF NOT EXISTS tags            ON memory_versions TYPE array DEFAULT [];
 DEFINE FIELD IF NOT EXISTS attention_vector ON memory_versions TYPE option<object>;
-DEFINE FIELD IF NOT EXISTS fold_id         ON memory_versions TYPE option<record<fold_log>>;
+DEFINE FIELD fold_id                       ON memory_versions TYPE option<record<fold_log>>;
 DEFINE FIELD IF NOT EXISTS snapshot_reason ON memory_versions TYPE string DEFAULT 'pre_fold';
 DEFINE FIELD IF NOT EXISTS created_at      ON memory_versions TYPE datetime DEFAULT time::now();
 
