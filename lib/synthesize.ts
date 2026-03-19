@@ -300,6 +300,17 @@ export async function performFold(params: FoldParams): Promise<void> {
     return;
   }
 
+  // Write last_folded_at BEFORE the LLM call so that checkPhiPressure() excludes these
+  // memories immediately, regardless of whether synthesis succeeds, fails, or is deduped.
+  // Separating this from synthesis_count ensures tier_promote only fires on successful folds.
+  const inputIds = memories.map((m) => m.id).filter(Boolean) as string[];
+  if (inputIds.length > 0) {
+    await query(
+      `UPDATE memories SET last_folded_at = time::now(), updated_at = time::now() WHERE id INSIDE $ids`,
+      { ids: inputIds },
+    ).catch((e) => console.error(`[anima:fold] last_folded_at pre-write failed: ${(e as Error).message}`));
+  }
+
   const mode = determineSynthesisMode(memories, trigger);
   console.error(`[anima:fold] Trigger: ${trigger} | Mode: ${mode} | Memories: ${memories.length}`);
 
@@ -461,7 +472,6 @@ export async function performFold(params: FoldParams): Promise<void> {
   };
   console.error("[anima:fold:attention_vector]", JSON.stringify(avResult));
   // Write fold_log (including which model was used for synthesis)
-  const inputIds = memories.map((m) => m.id).filter(Boolean);
   await query(
     `CREATE fold_log SET
        trigger_type = $trigger,
@@ -490,14 +500,12 @@ export async function performFold(params: FoldParams): Promise<void> {
     },
   );
 
-  // Increment synthesis_count and mark as folded in one atomic write.
-  // Combined to prevent transaction conflicts with the tier_promote ASYNC event —
-  // both fields updated together so the event fires only once on this batch.
+  // Increment synthesis_count on successful fold — triggers tier_promote ASYNC event.
+  // last_folded_at was already written before the LLM call (Bug 2 guard).
   if (inputIds.length > 0) {
     await query(
       `UPDATE memories SET
          synthesis_count = (synthesis_count ?? 0) + 1,
-         last_folded_at = time::now(),
          updated_at = time::now()
        WHERE id INSIDE $ids`,
       { ids: inputIds },
