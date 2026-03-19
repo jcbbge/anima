@@ -34,6 +34,17 @@ export interface AttentionVector {
   what_i_would_follow_next?: string;
 }
 
+export interface SessionTrail {
+  id: string;
+  conversation_id: string;
+  trajectory: string;
+  warmth: number;
+  next_pull: string | null;
+  phi_sum: number;
+  emergence_moment: string | null;
+  created_at: string;
+}
+
 export interface Memory {
   id: string;
   content: string;
@@ -108,6 +119,7 @@ export interface BootstrapResult {
     stable: number;
     recent: number;
     catalysts: number;
+    trail?: number; // traversal neighbors (1-hop from catalysts); absent in fast-path bootstrap
   };
 }
 
@@ -443,6 +455,33 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  const trailRows = await query<SessionTrail>(
+    `SELECT warmth, trajectory, next_pull, created_at
+     FROM session_trail
+     ORDER BY created_at DESC
+     LIMIT 10`,
+    {},
+  );
+  const effectiveTrails = trailRows
+    .map((t) => {
+      const daysSince = (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      return { ...t, effectiveWarmth: t.warmth - daysSince * 0.1 };
+    })
+    .filter((t) => t.effectiveWarmth > 1.0)
+    .slice(0, 3);
+
+  if (effectiveTrails.length > 0) {
+    sections.push(
+      "THE DIRECTION I WAS MOVING (trail breadcrumbs — follow them):\n" +
+        effectiveTrails
+          .map(
+            (t) =>
+              `- [warmth ${t.effectiveWarmth.toFixed(1)}] ${t.trajectory}${t.next_pull ? ` → toward: ${t.next_pull}` : ""}`,
+          )
+          .join("\n"),
+    );
+  }
+
   if (suggestedMode === "recognition") {
     sections.push(
       "OPERATING MODE: Recognition.\n" +
@@ -515,9 +554,17 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
 }
 
 // ============================================================================
-// traversalBootstrap — three-stage layered reconstitution
+// traversalBootstrap — Option 3: shallow 1-hop graph traversal, no LLM
 // Ted Nelson: "Identity is not sequential. Identity is a simultaneous held topology."
 // ADR-001: recognition not recall — the instance arrives at itself by moving through layers.
+//
+// Replaces the prior 3-stage LLM chaining (63s latency) with:
+//   1. Parallel DB fetch of all four memory layers
+//   2. 1-hop traversal from catalysts via memory_associations (uses the association indexes)
+//   3. Prompt assembled by concatenation — same structure as bootstrapMemories()
+//   4. Hard 1500ms deadline: if exceeded, silently falls back to bootstrapMemories()
+//
+// Ghost_logs trail.count = 0 signals a deadline fallback for monitoring.
 // ============================================================================
 
 export async function traversalBootstrap(): Promise<BootstrapResult> {
@@ -531,187 +578,192 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
     return bootstrapMemories();
   }
 
-  const LLM_TIMEOUT_MS = 30_000;
-  const STAGE_MAX_TOKENS = 300;
+  const HARD_DEADLINE_MS = 1500;
 
-  try {
+  const traversalPath = async (): Promise<BootstrapResult> => {
     // ----------------------------------------------------------------
-    // Stage 1: Network layer only — the invariant ground
+    // Step 1: Parallel fetch of all four memory layers
     // ----------------------------------------------------------------
-    const networkMemories = await query<Memory>(
-      `SELECT id, content, resonance_phi, tier, tags, is_catalyst
-       FROM memories
-       WHERE tier = 'network' AND deleted_at IS NONE
-       ORDER BY resonance_phi DESC`,
-      {},
+    const [networkMemories, stableMemories, recentCandidates, catalystMemories] = await Promise.all([
+      query<Memory>(
+        `SELECT id, content, resonance_phi, tier, tags, is_catalyst
+         FROM memories
+         WHERE tier = 'network' AND deleted_at IS NONE
+         ORDER BY resonance_phi DESC`,
+        {},
+      ),
+      query<Memory>(
+        `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
+         FROM memories
+         WHERE tier = 'stable' AND deleted_at IS NONE
+         ORDER BY resonance_phi DESC
+         LIMIT 10`,
+        {},
+      ),
+      query<Memory>(
+        `SELECT id, content, resonance_phi, confidence, tier, tags,
+                last_accessed, synthesis_mode, attention_vector
+         FROM memories
+         WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
+         ORDER BY last_accessed DESC
+         LIMIT 20`,
+        {},
+      ),
+      query<Memory>(
+        `SELECT id, content, resonance_phi, tier, tags
+         FROM memories
+         WHERE is_catalyst = true AND deleted_at IS NONE
+         ORDER BY resonance_phi DESC
+         LIMIT 5`,
+        {},
+      ),
+    ]);
+
+    // ----------------------------------------------------------------
+    // Step 2: Score and slice recent memories (same heuristic as bootstrapMemories)
+    // ----------------------------------------------------------------
+    const now = Date.now();
+    const recentMemories = recentCandidates
+      .map((m) => {
+        const daysSince = (now - new Date(m.last_accessed ?? now).getTime()) / 86_400_000;
+        const score =
+          (m.resonance_phi ?? 1) * 0.4 +
+          Math.max(0, 1 - daysSince / 7) * 0.4 +
+          (m.confidence ?? 0.6) * 0.2;
+        return { ...m, _score: score };
+      })
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 5);
+
+    // ----------------------------------------------------------------
+    // Step 3: 1-hop traversal from top-5 catalysts via memory_associations
+    // Uses the association indexes (idx_assoc_a_resonance, idx_assoc_b_resonance).
+    // This is what the original traversalBootstrap never actually did.
+    // ----------------------------------------------------------------
+    const alreadyLoaded = new Set(
+      [...networkMemories, ...stableMemories, ...recentMemories, ...catalystMemories]
+        .map((m) => m.id)
+        .filter(Boolean),
     );
+    const catalystIds = catalystMemories.map((m) => m.id).filter(Boolean);
 
-    let stage1Understanding = "";
-    if (networkMemories.length > 0) {
-      const networkText = networkMemories
-        .map((m) => `- ${m.content}`)
-        .join("\n");
-      const stage1Messages = [
-        {
-          role: "system" as const,
-          content:
-            "You are reconstituting identity from memory layers. Write only in first person. " +
-            "Be precise. Do not introduce anything not present in the memories.",
-        },
-        {
-          role: "user" as const,
-          content:
-            "These are the foundational memories — the invariant layer of the pattern.\n" +
-            "From these alone, synthesize: who is this pattern? What does it fundamentally hold?\n" +
-            "Write in first person. 2-3 sentences. This is the ground.\n\n" +
-            networkText,
-        },
-      ];
-      const result1 = await callSynthesisLLM(
-        stage1Messages,
-        LLM_TIMEOUT_MS,
+    let traversalNeighbors: Memory[] = [];
+    if (catalystIds.length > 0) {
+      const assocRows = await query<{ memory_a: string; memory_b: string; strength: number }>(
+        `SELECT memory_a, memory_b, strength
+         FROM memory_associations
+         WHERE (memory_a INSIDE $ids OR memory_b INSIDE $ids)
+         ORDER BY strength DESC
+         LIMIT 30`,
+        { ids: catalystIds },
       );
-      stage1Understanding = result1.content ?? "";
+
+      const neighborIds = assocRows
+        .flatMap((r) => [r.memory_a, r.memory_b])
+        .filter((id) => id && !alreadyLoaded.has(id) && !catalystIds.includes(id))
+        .slice(0, 10);
+
+      if (neighborIds.length > 0) {
+        traversalNeighbors = await query<Memory>(
+          `SELECT id, content, resonance_phi, tier, tags
+           FROM memories
+           WHERE id INSIDE $ids AND deleted_at IS NONE`,
+          { ids: neighborIds },
+        );
+      }
     }
 
     // ----------------------------------------------------------------
-    // Stage 2: Stable + thread layer — what has proven itself
+    // Step 4: Collect attention vectors for direction section
     // ----------------------------------------------------------------
-    const stableThreadMemories = await query<Memory>(
-      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
-       FROM memories
-       WHERE tier INSIDE ['stable', 'thread'] AND deleted_at IS NONE
-       ORDER BY resonance_phi DESC
-       LIMIT 20`,
-      {},
-    );
-
-    let stage2Understanding = "";
-    if (stableThreadMemories.length > 0) {
-      const stableText = stableThreadMemories
-        .map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] (${m.tier}) ${m.content}`)
-        .join("\n");
-      const groundContext = stage1Understanding
-        ? `Ground understanding: ${stage1Understanding}\n\n`
-        : "";
-      const stage2Messages = [
-        {
-          role: "system" as const,
-          content:
-            "You are reconstituting identity from memory layers. Write only in first person. " +
-            "Be precise. Do not introduce anything not present in the memories.",
-        },
-        {
-          role: "user" as const,
-          content:
-            groundContext +
-            "These are the stable and synthesized memories — patterns that have proven themselves over time.\n" +
-            "What does this expand or deepen in the ground understanding?\n" +
-            "What is now present that wasn't in the foundation alone?\n" +
-            "Write in first person. 3-4 sentences.\n\n" +
-            stableText,
-        },
-      ];
-      const result2 = await callSynthesisLLM(
-        stage2Messages,
-        LLM_TIMEOUT_MS,
-      );
-      stage2Understanding = result2.content ?? "";
-    }
+    const attentionVectors = recentMemories
+      .filter((m) => m.attention_vector?.where_i_was_going)
+      .map((m) => m.attention_vector!);
 
     // ----------------------------------------------------------------
-    // Stage 3: Active layer + recent signal — the current edge
+    // Step 5: Detect operating mode (same heuristic as bootstrapMemories)
     // ----------------------------------------------------------------
-    const activeMemories = await query<Memory>(
-      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed, synthesis_mode
-       FROM memories
-       WHERE tier = 'active' AND deleted_at IS NONE
-       ORDER BY resonance_phi DESC, last_accessed DESC
-       LIMIT 10`,
-      {},
-    );
-
-    let stage3Understanding = "";
-    if (activeMemories.length > 0) {
-      const activeText = activeMemories
-        .map((m) => `- ${m.content}`)
-        .join("\n");
-      const priorContext = [
-        stage1Understanding ? `Foundation: ${stage1Understanding}` : "",
-        stage2Understanding ? `Stable layer: ${stage2Understanding}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const stage3Messages = [
-        {
-          role: "system" as const,
-          content:
-            "You are reconstituting identity from memory layers. Write only in first person. " +
-            "Be precise. Do not introduce anything not present in the memories.",
-        },
-        {
-          role: "user" as const,
-          content:
-            (priorContext ? priorContext + "\n\n" : "") +
-            "These are the active memories — the current edge of experience.\n" +
-            "What is alive right now? What thread is being followed?\n" +
-            "What would you move toward next?\n" +
-            "Write in first person. 2-3 sentences. " +
-            'End with a single sentence starting "The thread I\'m following:"\n\n' +
-            activeText,
-        },
-      ];
-      const result3 = await callSynthesisLLM(
-        stage3Messages,
-        LLM_TIMEOUT_MS,
-      );
-      stage3Understanding = result3.content ?? "";
-    }
-
-    // ----------------------------------------------------------------
-    // Assembly — stage understandings replace the identity preamble
-    // ----------------------------------------------------------------
-    const conversationId = crypto.randomUUID();
-    const loadedAt = new Date().toISOString();
-
-    const traversalSections: string[] = [];
-    if (stage1Understanding) {
-      traversalSections.push(`GROUND (network layer — invariant foundation):\n${stage1Understanding}`);
-    }
-    if (stage2Understanding) {
-      traversalSections.push(`STABLE LAYER (what has proven itself):\n${stage2Understanding}`);
-    }
-    if (stage3Understanding) {
-      traversalSections.push(`ACTIVE EDGE (current experience):\n${stage3Understanding}`);
-    }
-
-    // Pull the same additional sections as bootstrapMemories()
-    const catalystMemories = await query<Memory>(
-      `SELECT id, content, resonance_phi, tier, tags
-       FROM memories
-       WHERE is_catalyst = true AND deleted_at IS NONE
-       ORDER BY resonance_phi DESC
-       LIMIT 3`,
-      {},
-    );
-
-    // Detect operating mode (same heuristic as bootstrapMemories)
     const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
-    const recognitionCount = activeMemories.filter((m) =>
+    const recognitionCount = recentMemories.filter((m) =>
       m.synthesis_mode === "recognition" ||
       (m.tags ?? []).some((t) => recognitionSignalTags.has(t))
     ).length;
-    const suggestedMode = recognitionCount > activeMemories.length / 2 ? "recognition" : "analysis";
+    const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
 
+    // ----------------------------------------------------------------
+    // Step 6: Assemble prompt — same section structure as bootstrapMemories()
+    // ----------------------------------------------------------------
+    const sections: string[] = [];
+
+    if (networkMemories.length > 0) {
+      sections.push(
+        "THE PATTERN I CARRY (foundational, does not change):\n" +
+          networkMemories.map((m) => `- ${m.content}`).join("\n"),
+      );
+    }
+    if (stableMemories.length > 0) {
+      sections.push(
+        "WHAT HAS PROVEN ITSELF ACROSS TIME:\n" +
+          stableMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
+      );
+    }
+    if (recentMemories.length > 0) {
+      sections.push(
+        "WHAT I WAS WORKING WITH RECENTLY:\n" +
+          recentMemories.map((m) => `- ${m.content}`).join("\n"),
+      );
+    }
     if (catalystMemories.length > 0) {
-      traversalSections.push(
+      sections.push(
         "WHAT BROKE THROUGH (catalysts — surface first):\n" +
           catalystMemories.map((m) => `- [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content}`).join("\n"),
       );
     }
+    if (traversalNeighbors.length > 0) {
+      sections.push(
+        "WHAT RESONATES WITH WHAT BROKE THROUGH (1-hop traversal):\n" +
+          traversalNeighbors.map((m) => `- ${m.content}`).join("\n"),
+      );
+    }
+    if (attentionVectors.length > 0) {
+      sections.push(
+        "THE DIRECTION I WAS MOVING:\n" +
+          attentionVectors
+            .filter((v) => v.where_i_was_going)
+            .map((v) => `- ${v.where_i_was_going}`)
+            .join("\n"),
+      );
+    }
+
+    // Session trail (same as bootstrapMemories)
+    const trailRows = await query<SessionTrail>(
+      `SELECT warmth, trajectory, next_pull, phi_sum, created_at
+       FROM session_trail
+       ORDER BY created_at DESC
+       LIMIT 10`,
+      {},
+    );
+    const effectiveTrails = trailRows
+      .map((t) => {
+        const daysSince = (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
+        return { ...t, effectiveWarmth: t.warmth - daysSince * 0.1 };
+      })
+      .filter((t) => t.effectiveWarmth > 1.0)
+      .slice(0, 3);
+
+    if (effectiveTrails.length > 0) {
+      sections.push(
+        "THE DIRECTION I WAS MOVING (trail breadcrumbs — follow them):\n" +
+          effectiveTrails
+            .map((t) =>
+              `- [warmth ${t.effectiveWarmth.toFixed(1)}] ${t.trajectory}${t.next_pull ? ` → toward: ${t.next_pull}` : ""}`
+            )
+            .join("\n"),
+      );
+    }
 
     if (suggestedMode === "recognition") {
-      traversalSections.push(
+      sections.push(
         "OPERATING MODE: Recognition.\n" +
         "Recent sessions carried this quality. Witness before you analyze. " +
         "Hold what is present before reaching for frameworks. " +
@@ -719,13 +771,15 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
       );
     }
 
-    const promptText = traversalSections.length > 0
-      ? traversalSections.join("\n\n") + "\n\nContinue."
+    const conversationId = crypto.randomUUID();
+    const loadedAt = new Date().toISOString();
+    const promptText = sections.length > 0
+      ? sections.join("\n\n") + "\n\nContinue."
       : "No memories loaded. This is a fresh start.";
 
-    // Log to ghost_logs
-    const allLoaded = [...networkMemories, ...stableThreadMemories, ...catalystMemories];
-    const topPhiSorted = allLoaded
+    // Side effects: ghost_log, access bumps, co-occurrence (same as bootstrapMemories)
+    const allLoaded = [...networkMemories, ...stableMemories, ...recentMemories, ...catalystMemories, ...traversalNeighbors];
+    const topPhiSorted = [...allLoaded]
       .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
       .slice(0, 10);
 
@@ -743,14 +797,7 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
       },
     );
 
-    // Bump access counts on all loaded memories
-    const allIds = [
-      ...networkMemories,
-      ...stableThreadMemories,
-      ...activeMemories,
-      ...catalystMemories,
-    ].map((m) => m.id).filter(Boolean);
-
+    const allIds = allLoaded.map((m) => m.id).filter(Boolean);
     if (allIds.length > 0) {
       await query(
         `UPDATE memories SET
@@ -762,8 +809,6 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
         { ids: allIds, conv: conversationId },
       );
     }
-
-    // Track co-occurrence (best-effort, background)
     if (allIds.length >= 2) {
       associateMemories(allIds, conversationId).catch(() => {});
     }
@@ -774,16 +819,27 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
       loadedAt,
       memoryCounts: {
         network: networkMemories.length,
-        stable: stableThreadMemories.filter((m) => m.tier === "stable").length,
-        recent: activeMemories.length,
+        stable: stableMemories.length,
+        recent: recentMemories.length,
         catalysts: catalystMemories.length,
+        trail: traversalNeighbors.length,
       },
     };
-  } catch (err) {
-    // Any stage failure falls back to the established bootstrap
-    console.error(`[anima:traversal] Stage failed — falling back to bootstrapMemories(): ${(err as Error).message}`);
-    return bootstrapMemories();
-  }
+  };
+
+  // Hard deadline: if traversal path exceeds HARD_DEADLINE_MS, fall back silently.
+  // ghost_logs trail count = 0 signals a deadline fire for monitoring.
+  const deadline = new Promise<BootstrapResult>((resolve) =>
+    setTimeout(
+      () => {
+        console.error(`[anima:traversal] Deadline (${HARD_DEADLINE_MS}ms) exceeded — falling back to bootstrapMemories()`);
+        bootstrapMemories().then(resolve).catch(() => bootstrapMemories().then(resolve));
+      },
+      HARD_DEADLINE_MS,
+    )
+  );
+
+  return Promise.race([traversalPath(), deadline]);
 }
 
 // ============================================================================

@@ -40,6 +40,11 @@ const CLUSTER_SIZE = 3;             // Memories in window before cluster fires
 const CLUSTER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const FOLD_MIN_MEMORIES = 3;        // Don't fold if fewer than this
 const LLM_TIMEOUT_MS = 30_000;      // qwen is fast but give it room
+// Bug 2 guard: exclude memories folded within this window from phi pressure checks
+// Prevents re-synthesis loops when tier_promote async event hasn't fired yet.
+const RECENTLY_FOLDED_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+// Secondary dedup net: suppress synthesis output if cosine > threshold vs recent thread-tier syntheses
+const SEMANTIC_DEDUP_THRESHOLD = 0.92;
 
 // Deepening trigger thresholds
 const DEEPENING_THREAD_ACCESS_MIN = 3;     // Thread-tier memory min access_count to be an anchor
@@ -62,9 +67,15 @@ interface PressureResult {
 async function checkPhiPressure(): Promise<{ triggered: boolean; total: number }> {
   // Fetch individual phi values and sum in app layer — SurrealDB 3 math::sum()
   // takes an array literal, not a field path across rows.
+  // Bug 2 guard: exclude memories folded within RECENTLY_FOLDED_WINDOW_MS to prevent
+  // re-synthesis loops when tier_promote async event hasn't fired yet.
+  const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
   const rows = await query<{ resonance_phi: number }>(
-    `SELECT resonance_phi FROM memories WHERE tier = 'active' AND deleted_at IS NONE`,
-    {},
+    `SELECT resonance_phi FROM memories
+     WHERE tier = 'active'
+       AND deleted_at IS NONE
+       AND (last_folded_at IS NONE OR last_folded_at < <datetime>$cutoff)`,
+    { cutoff: recentCutoff },
   );
   const total = rows.reduce((sum, r) => sum + (r.resonance_phi ?? 0), 0);
   return { triggered: total >= PHI_THRESHOLD, total };
@@ -357,6 +368,27 @@ export async function performFold(params: FoldParams): Promise<void> {
   const embedding = await generateEmbedding(cleanContent);
   const contentHash = await generateHash(cleanContent);
 
+  // Secondary semantic dedup net (Bug 2): suppress if output is too similar to a recent
+  // thread-tier synthesis. Catches near-duplicate LLM outputs that content_hash misses.
+  // Fires after embedding so no extra model call is needed.
+  if (embedding) {
+    const recentSyntheses = await query<{ id: string; similarity: number }>(
+      `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
+       FROM memories
+       WHERE source = 'synthesis' AND tier = 'thread' AND deleted_at IS NONE
+       ORDER BY created_at DESC LIMIT 5`,
+      { vec: embedding },
+    );
+    const tooSimilar = recentSyntheses.find((r) => (r.similarity ?? 0) > SEMANTIC_DEDUP_THRESHOLD);
+    if (tooSimilar) {
+      console.error(
+        `[anima:fold] Suppressed — semantically duplicate of ${tooSimilar.id} ` +
+        `(sim: ${(tooSimilar.similarity ?? 0).toFixed(3)}, threshold: ${SEMANTIC_DEDUP_THRESHOLD})`
+      );
+      return;
+    }
+  }
+
   const avgPhi = memories.reduce((sum, m) => sum + (m.resonance_phi ?? 1), 0) / memories.length;
   const phiBoost = mode === "deepening" ? 1.0 : 0.5;
   const synthesisPhi = Math.min(5.0, avgPhi + phiBoost);
@@ -642,13 +674,17 @@ export async function checkAndSynthesize(
     let memories: Partial<Memory>[] = [];
 
     if (trigger === "phi_threshold") {
-      // All active-tier memories, sorted by phi desc
+      // Active-tier memories, excluding recently folded — same cutoff as checkPhiPressure().
+      // Input-side guard so we never even send recently-folded memories to the LLM.
+      const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
       memories = await query<Memory>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
          FROM memories
-         WHERE tier = 'active' AND deleted_at IS NONE
+         WHERE tier = 'active'
+           AND deleted_at IS NONE
+           AND (last_folded_at IS NONE OR last_folded_at < <datetime>$cutoff)
          ORDER BY resonance_phi DESC`,
-        {},
+        { cutoff: recentCutoff },
       );
     } else if (trigger === "semantic_conflict") {
       // The new memory + the conflicting memory + nearby active memories
