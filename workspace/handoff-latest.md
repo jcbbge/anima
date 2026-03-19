@@ -1,18 +1,33 @@
 # Session Handoff
-Date: 2026-03-18
+Date: 2026-03-19
 Branch: main
 
-Completed:
-- Fixed dev-brain "Anonymous access not allowed" — `getDb()` now checks `db.status === "connected"` before returning cached singleton; subscribes to `"disconnected"` event to proactively reset so next call creates fresh authenticated connection instead of using stale auth
-- Fixed ALL plist PATH gaps — surreal, anima-worker, anima-daemon, curiosity-worker, ollama all had missing/wrong PATHs; cleaned up surreal plist which had stray KOTADB/OLLAMA env vars that don't belong there
-- Redesigned `core` dashboard — live port check (HTTP/TCP) as primary status indicator instead of launchd cache; added CFG column showing plist health inline; removed redundant `validate` and `status` commands; `status`/`st` now aliases to `dash`
+## Completed
 
-Current State:
-- 3 files modified in anima repo (uncommitted): hooks/capture-interaction.sh, schema/anima.surql, workspace/handoff-latest.md
-- Untracked: .claude/, cli/anima (wrapper), docs/anima-engine-prd.md, scripts/curiosity-worker.plist.template, scripts/curiosity-worker.ts
-- Infrastructure changes (bin/core, dev-backbone/mcp-server/index.js, LaunchAgents plists) live outside any git repo — not committed anywhere
+- **Subagent MCP dynamic agent system built** — `~/dev-backbone/subagent-mcp/` overhauled with 5 new tools:
+  - `subagents_create` — creates named long-lived sessions with model + system prompt
+  - `subagents_delegate` — sends messages, auto-continues existing sessions
+  - `subagents_sessions/info/destroy` — session lifecycle management
+  - `subagents_models` — lists OpenRouter models from API (14 available, categorized)
+  - `openrouter-models.ts` — fetches from openrouter API, filters by opencode whitelist, caches 5min
+  - `executor-gateway.ts` — lightweight HTTP proxy on port 3095 that handles MCP handshake (session persistence) for the executor at 8000
+- **Key discovery**: opencode SDK's `session.prompt()` is synchronous — waits for full response. No SSE events needed. `session.status()` exists but returns empty map for API-created sessions. `session.prompt()` response contains full text parts directly.
+- **Skill trigger bug fixed**: mentioning `skill` (or any skill name) in subagent system prompts causes opencode to evaluate ALL skill permission patterns on every call → timeouts. System prompt must list only raw tool names.
+- **Confirmed subagent can reach all 3 MCP servers via bash HTTP**:
+  - dev-brain 3097, anima 3098, kotadb 3099 (all via curl JSON-RPC)
+  - executor 8000 requires session persistence — gateway at 3095 handles this
+- **Minor**: `lib/memory.ts` catalystCount GROUP ALL fix
 
-Next Steps:
-1. Commit the anima repo changes (hooks port fix + schema changes) — ask Josh if ready
-2. Apply the same `disconnected` event + `db.status` fix to anima-mcp (same SurrealDB client pattern, same stale auth risk)
-3. Verify ~/bin/anima deno wrapper works end-to-end against cli/anima.ts
+## Current State
+
+- 2 files modified (uncommitted): `lib/memory.ts`, `workspace/handoff-latest.md`
+- `gemini-reasoner` subagent is live with session `ses_2fbb8bebcffeB1ya16EM13pqCg` (3 messages)
+- Executor gateway running on port 3095 (bun process)
+
+## Next Steps
+
+1. Commit `lib/memory.ts` + handoff update
+2. Deploy executor-gateway as launchd daemon (or integrate into subagent-mcp startup)
+3. Test `gemini-reasoner` with a real task to verify multi-turn memory works
+4. Consider: the `@gemini` shorthand routing — main thread would need a skill/hook to intercept `@name` mentions and route to `subagents_delegate(agent="name", input="...")`
+5. Consider: periodic session compaction to prevent context window overflow (check `session.compact` API)

@@ -1072,7 +1072,7 @@ export async function getStats(): Promise<AnimaStats> {
       {},
     ),
     query<{ count: number }>(
-      `SELECT count() AS count FROM memories WHERE is_catalyst = true AND deleted_at IS NONE`,
+      `SELECT count() AS count FROM memories WHERE is_catalyst = true AND deleted_at IS NONE GROUP ALL`,
       {},
     ),
   ]);
