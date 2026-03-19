@@ -91,7 +91,12 @@ async function dispatchFold(): Promise<void> {
   await setWatermark("running");
 
   try {
-    const recentCutoff = new Date(Date.now() - (30 * 60 * 1000)).toISOString();
+    const windowRow = await query<{ value: string }>(
+      "SELECT `value` FROM fold_config WHERE key = 'recently_folded_window_minutes' LIMIT 1",
+      {},
+    );
+    const windowMs = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
+    const recentCutoff = new Date(Date.now() - windowMs).toISOString();
     const memories = await query<Memory>(
       `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
        FROM memories

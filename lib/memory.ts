@@ -242,19 +242,21 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
 // ============================================================================
 
 async function linkMemoryToTensions(memoryId: string, embedding: number[]): Promise<void> {
+  // Fetch all held tensions with embeddings, compute similarity in code
+  // (SurrealDB 3.0 doesn't support ORDER BY on computed vector similarity columns)
   const tensions = await query<{ id: string; resonance_phi: number; sim: number }>(
     `SELECT id, resonance_phi,
        vector::similarity::cosine(context_embedding, $vec) AS sim
      FROM tension_fields
      WHERE resolution_status = 'held'
-       AND context_embedding IS NOT NONE
-     ORDER BY sim DESC
-     LIMIT 1`,
+       AND context_embedding IS NOT NONE`,
     { vec: embedding },
   );
 
-  const match = tensions[0];
-  if (!match || (match.sim ?? 0) < 0.75) return;
+  const match = tensions
+    .filter((t) => (t.sim ?? 0) >= 0.75)
+    .sort((a, b) => (b.sim ?? 0) - (a.sim ?? 0))[0];
+  if (!match) return;
 
   await query(
     `UPDATE $id SET

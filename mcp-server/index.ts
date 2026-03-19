@@ -276,7 +276,7 @@ async function getSessionContext(conversationId: string | null): Promise<{
 
   if (conversationId) {
     const ghostRows = await query<{ prompt_text: string }>(
-      `SELECT prompt_text FROM ghost_logs WHERE conversation_id = $conv ORDER BY created_at DESC LIMIT 1`,
+      `SELECT prompt_text, created_at FROM ghost_logs WHERE conversation_id = $conv ORDER BY created_at DESC LIMIT 1`,
       { conv: conversationId },
     );
     if (ghostRows[0]) {
@@ -284,7 +284,7 @@ async function getSessionContext(conversationId: string | null): Promise<{
     }
 
     const memRows = await query<{ content: string; resonance_phi: number }>(
-      `SELECT content, resonance_phi FROM memories
+      `SELECT content, resonance_phi, created_at FROM memories
        WHERE conversation_id = $conv AND deleted_at IS NONE
        ORDER BY created_at DESC LIMIT 20`,
       { conv: conversationId },
@@ -526,7 +526,7 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
   // Fetch session memories before trajectory generation (anchors narrative in what was actually stored)
   const sessionMemories = convId
     ? await query<{ id: string; content: string; resonance_phi: number }>(
-        `SELECT id, content, resonance_phi
+        `SELECT id, content, resonance_phi, created_at
          FROM memories
          WHERE conversation_id = $conv AND deleted_at IS NONE
          ORDER BY created_at ASC`,

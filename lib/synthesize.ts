@@ -385,7 +385,7 @@ export async function performFold(params: FoldParams): Promise<void> {
   // Fires after embedding so no extra model call is needed.
   if (embedding) {
     const recentSyntheses = await query<{ id: string; similarity: number }>(
-      `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
+      `SELECT id, created_at, vector::similarity::cosine(embedding, $vec) AS similarity
        FROM memories
        WHERE source = 'synthesis' AND tier = 'thread' AND deleted_at IS NONE
        ORDER BY created_at DESC LIMIT 5`,
