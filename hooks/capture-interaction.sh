@@ -37,7 +37,7 @@ TAGS_JSON='["hook","interaction"]'
 # Write to Anima (NS: anima, DB: memory)
 # Uses SurrealDB HTTP API — upsert via content_hash to avoid duplication
 curl -s -X POST \
-  'http://127.0.0.1:8000/sql' \
+  'http://127.0.0.1:8002/sql' \
   -H 'Content-Type: application/json' \
   -H 'surreal-ns: anima' \
   -H 'surreal-db: memory' \
@@ -53,7 +53,7 @@ EXISTING=$(cat /tmp/anima_hook_check.json 2>/dev/null | /usr/bin/jq -r '.[0].res
 [ "$EXISTING" != "0" ] && exit 0
 
 curl -s -X POST \
-  'http://127.0.0.1:8000/sql' \
+  'http://127.0.0.1:8002/sql' \
   -H 'Content-Type: application/json' \
   -H 'surreal-ns: anima' \
   -H 'surreal-db: memory' \

@@ -416,3 +416,40 @@ DEFINE TABLE IF NOT EXISTS phi_summary
   FROM memories
   WHERE tier = 'active' AND deleted_at IS NONE
   GROUP ALL;
+
+
+-- =====================================================
+-- MEMORY VERSIONS: Pre-fold snapshots
+-- Added 2026-03-17
+-- Snapshot of input memory state captured before tier
+-- promotion during a fold. Enables recovery of pre-fold
+-- content, phi, and tier for any promoted memory.
+-- =====================================================
+
+DEFINE TABLE IF NOT EXISTS memory_versions SCHEMAFULL;
+
+DEFINE FIELD IF NOT EXISTS memory_id       ON memory_versions TYPE string;
+DEFINE FIELD IF NOT EXISTS version_number  ON memory_versions TYPE int;
+DEFINE FIELD IF NOT EXISTS content         ON memory_versions TYPE string;
+DEFINE FIELD IF NOT EXISTS phi             ON memory_versions TYPE float;
+DEFINE FIELD IF NOT EXISTS tier            ON memory_versions TYPE string;
+DEFINE FIELD IF NOT EXISTS tags            ON memory_versions TYPE array DEFAULT [];
+DEFINE FIELD IF NOT EXISTS attention_vector ON memory_versions TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS fold_id         ON memory_versions TYPE option<record<fold_log>>;
+DEFINE FIELD IF NOT EXISTS snapshot_reason ON memory_versions TYPE string DEFAULT 'pre_fold';
+DEFINE FIELD IF NOT EXISTS created_at      ON memory_versions TYPE datetime DEFAULT time::now();
+
+DEFINE INDEX IF NOT EXISTS mv_memory_id ON memory_versions FIELDS memory_id;
+
+
+-- =====================================================
+-- RESONANCE FIELDS on memory_associations
+-- Added 2026-03-17
+-- Written by fold resonance scoring when a fold produces
+-- phi_after > avg_phi of inputs (generative synthesis).
+-- resonance_score   — cumulative resonance signal (sum of deltas)
+-- resonance_fold_count — how many folds contributed resonance
+-- =====================================================
+
+DEFINE FIELD IF NOT EXISTS resonance_score      ON memory_associations TYPE option<float> DEFAULT 0.0;
+DEFINE FIELD IF NOT EXISTS resonance_fold_count ON memory_associations TYPE option<int>   DEFAULT 0;
