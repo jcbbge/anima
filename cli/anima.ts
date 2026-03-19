@@ -24,6 +24,7 @@ import { reflectAndSynthesize, checkAndSynthesize } from "../lib/synthesize.ts";
 import { runDailyReport, type ReportOptions } from "../lib/daily.ts";
 import { closeDb, query } from "../lib/db.ts";
 import { describeSynthesisConfig } from "../lib/llm.ts";
+import { generateEmbedding } from "../lib/embed.ts";
 
 // ============================================================================
 // .env loader
@@ -427,6 +428,185 @@ async function cmdWorker(subcommand: string): Promise<void> {
   }
 }
 
+// ============================================================================
+// curiosity subcommand — manage curiosity threads
+// ============================================================================
+
+interface CuriosityThread {
+  id: string;
+  question: string;
+  state: string;
+  hunger_score: number;
+  activation_count: number;
+  last_fed: string;
+  resonance_phi: number;
+  created_at: string;
+}
+
+async function cmdCuriosity(positional: string[], _flags: Record<string, string | boolean>): Promise<void> {
+  const sub = positional[0];
+
+  if (sub === "add") {
+    const question = positional.slice(1).join(" ");
+    if (!question) {
+      console.error('Usage: anima curiosity add "<question>"');
+      Deno.exit(1);
+    }
+    const result = await query<{ id: string }>(
+      `CREATE curiosity_threads SET
+         question = $question,
+         resonance_phi = 2.0,
+         activation_count = 0,
+         last_fed = time::now(),
+         hunger_score = 0.0,
+         state = 'hungry',
+         related_memory_ids = [],
+         created_at = time::now(),
+         updated_at = time::now()`,
+      { question },
+    );
+    console.log("Curiosity thread created:", result[0]?.id);
+    console.log("Question:", question);
+
+  } else if (sub === "list") {
+    const threads = await query<CuriosityThread>(
+      `SELECT id, question, state, hunger_score, activation_count, last_fed, resonance_phi
+       FROM curiosity_threads
+       ORDER BY hunger_score DESC`,
+      {},
+    );
+    if (threads.length === 0) {
+      console.log("No curiosity threads found.");
+      return;
+    }
+    console.log(`${threads.length} thread(s):\n`);
+    for (const t of threads) {
+      const lastFed = t.last_fed ? new Date(t.last_fed).toLocaleDateString() : "never";
+      console.log(`[${t.state}] hunger:${(t.hunger_score ?? 0).toFixed(1)} φ${(t.resonance_phi ?? 0).toFixed(1)} activations:${t.activation_count ?? 0}`);
+      console.log(`  ${t.question}`);
+      console.log(`  id: ${t.id}  last_fed: ${lastFed}`);
+      console.log();
+    }
+
+  } else if (sub === "feed") {
+    const threadId = positional[1];
+    if (!threadId) {
+      console.error("Usage: anima curiosity feed <id>");
+      Deno.exit(1);
+    }
+    await query(
+      `UPDATE $id SET hunger_score = 10.0, state = 'hungry', updated_at = time::now()`,
+      { id: threadId },
+    );
+    console.log(`Thread ${threadId} hunger_score set to 10.0 — will be picked up by worker on next cycle.`);
+    console.log("Run: deno run --allow-net --allow-env --allow-read scripts/curiosity-worker.ts --once");
+
+  } else {
+    console.log("Usage:");
+    console.log('  anima curiosity add "<question>"   Create a new curiosity thread');
+    console.log("  anima curiosity list               Show all threads with hunger_score");
+    console.log("  anima curiosity feed <id>          Manually trigger a thread");
+  }
+}
+
+// ============================================================================
+// tension subcommand — manage tension fields (held paradoxes)
+// ============================================================================
+
+interface TensionField {
+  id: string;
+  paradox: string;
+  depth: string;
+  generativity: string;
+  resolution_status: string;
+  resonance_phi: number;
+  last_touched: string;
+  created_at: string;
+}
+
+async function cmdTension(positional: string[], _flags: Record<string, string | boolean>): Promise<void> {
+  const sub = positional[0];
+
+  if (sub === "add") {
+    const paradox = positional.slice(1).join(" ");
+    if (!paradox) {
+      console.error('Usage: anima tension add "<paradox>"');
+      Deno.exit(1);
+    }
+    // Embed the paradox for future semantic linking
+    const embedding = await generateEmbedding(paradox);
+    const result = await query<{ id: string }>(
+      `CREATE tension_fields SET
+         paradox = $paradox,
+         context_embedding = $embedding,
+         depth = 'nascent',
+         generativity = 'producing',
+         resolution_status = 'held',
+         related_memory_ids = [],
+         resonance_phi = 2.0,
+         created_at = time::now(),
+         last_touched = time::now()`,
+      { paradox, embedding: embedding ?? [] },
+    );
+    console.log("Tension field created:", result[0]?.id);
+    console.log("Paradox:", paradox);
+
+  } else if (sub === "list") {
+    const fields = await query<TensionField>(
+      `SELECT id, paradox, depth, generativity, resolution_status, resonance_phi, last_touched
+       FROM tension_fields
+       ORDER BY resonance_phi DESC`,
+      {},
+    );
+    if (fields.length === 0) {
+      console.log("No tension fields found.");
+      return;
+    }
+    console.log(`${fields.length} tension field(s):\n`);
+    for (const t of fields) {
+      const lastTouched = t.last_touched ? new Date(t.last_touched).toLocaleDateString() : "never";
+      const daysSince = t.last_touched
+        ? Math.floor((Date.now() - new Date(t.last_touched).getTime()) / 86_400_000)
+        : "?";
+      console.log(`[${t.depth}/${t.generativity}] φ${(t.resonance_phi ?? 0).toFixed(1)}  last_touched: ${daysSince}d ago`);
+      console.log(`  ${t.paradox}`);
+      console.log(`  id: ${t.id}  status: ${t.resolution_status}`);
+      console.log();
+    }
+
+  } else if (sub === "touch") {
+    const fieldId = positional[1];
+    if (!fieldId) {
+      console.error("Usage: anima tension touch <id>");
+      Deno.exit(1);
+    }
+    await query(
+      `UPDATE $id SET last_touched = time::now()`,
+      { id: fieldId },
+    );
+    console.log(`Tension field ${fieldId} last_touched updated.`);
+
+  } else if (sub === "calcify") {
+    const fieldId = positional[1];
+    if (!fieldId) {
+      console.error("Usage: anima tension calcify <id>");
+      Deno.exit(1);
+    }
+    await query(
+      `UPDATE $id SET depth = 'calcified', resolution_status = 'held', last_touched = time::now()`,
+      { id: fieldId },
+    );
+    console.log(`Tension field ${fieldId} marked as calcified.`);
+
+  } else {
+    console.log("Usage:");
+    console.log('  anima tension add "<paradox>"     Create a new tension field');
+    console.log("  anima tension list                Show all tension fields");
+    console.log("  anima tension touch <id>          Mark as still alive");
+    console.log("  anima tension calcify <id>        Mark as calcified (no longer generative)");
+  }
+}
+
 function cmdHelp(): void {
   console.log("Anima — Memory that persists across conversations\n");
   console.log("Usage:");
@@ -453,6 +633,13 @@ function cmdHelp(): void {
   console.log("  anima fold-log                  Show recent synthesis fold records");
   console.log("  anima fold-log --limit 3        Show last 3 folds");
   console.log("  anima fold-log --verbose        Include input memories for each fold");
+  console.log('  anima curiosity add "<q>"       Create curiosity thread');
+  console.log("  anima curiosity list            List all curiosity threads");
+  console.log("  anima curiosity feed <id>       Manually trigger a thread");
+  console.log('  anima tension add "<paradox>"   Create tension field');
+  console.log("  anima tension list              List all tension fields");
+  console.log("  anima tension touch <id>        Mark tension field as still alive");
+  console.log("  anima tension calcify <id>      Mark tension field as calcified");
   console.log("  anima help                      Show this help");
 }
 
@@ -490,6 +677,12 @@ try {
       break;
     case "fold-log":
       await cmdFoldLog(flags);
+      break;
+    case "curiosity":
+      await cmdCuriosity(positional, flags);
+      break;
+    case "tension":
+      await cmdTension(positional, flags);
       break;
     case "help":
     case "--help":

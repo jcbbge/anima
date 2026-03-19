@@ -140,6 +140,7 @@ DEFINE FIELD phi_sum            ON session_trail TYPE option<float> DEFAULT 0;
 DEFINE FIELD emergence_moment    ON session_trail TYPE option<string>;
 DEFINE FIELD trajectory_emb     ON session_trail TYPE array;
 DEFINE FIELD next_pull_emb      ON session_trail TYPE option<array>;
+DEFINE FIELD key_memory_ids     ON session_trail TYPE array DEFAULT [];
 DEFINE FIELD created_at         ON session_trail TYPE datetime DEFAULT time::now();
 DEFINE INDEX session_trail_conv ON session_trail FIELDS conversation_id;
 
@@ -191,8 +192,10 @@ INSERT INTO fold_config [
   { key: 'fold_model',              value: 'claude-haiku-4-5-20251001', description: 'LLM model for synthesis calls' },
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
-  { key: 'traversal_bootstrap',     value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
-  { key: 'pending_synthesis',       value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' }
+  { key: 'traversal_bootstrap',            value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
+  { key: 'pending_synthesis',              value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
+  { key: 'expression_readiness_threshold', value: '3.0',                       description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
+  { key: 'curiosity_hunger_threshold',     value: '5.0',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
 ];
 
 
@@ -253,6 +256,9 @@ DEFINE FIELD resonance_phi      ON tension_fields TYPE float DEFAULT 2.0
   ASSERT $value >= 0.0 AND $value <= 5.0;
 DEFINE FIELD created_at         ON tension_fields TYPE datetime DEFAULT time::now();
 DEFINE FIELD last_touched       ON tension_fields TYPE datetime DEFAULT time::now();
+
+DEFINE FIELD context_embedding ON tension_fields TYPE option<array>;
+DEFINE INDEX tension_embedding ON tension_fields FIELDS context_embedding MTREE DIMENSION 768 DIST COSINE;
 
 DEFINE INDEX tension_depth ON tension_fields FIELDS depth;
 DEFINE INDEX tension_phi   ON tension_fields FIELDS resonance_phi;

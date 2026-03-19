@@ -119,8 +119,13 @@ export interface BootstrapResult {
     stable: number;
     recent: number;
     catalysts: number;
-    trail?: number; // traversal neighbors (1-hop from catalysts); absent in fast-path bootstrap
+    trail?: number;
+    expressions?: number;
+    tensionFields?: number;
+    curiosityThreads?: number;
   };
+  safeWord?: string;
+  expressions?: Array<{ id: string; content: string; expression_type: string; readiness_phi: number }>;
 }
 
 export interface GetCatalystsParams {
@@ -160,11 +165,24 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
   );
 
   if (existing.length > 0) {
+    const updateFields: string[] = [
+      "access_count += 1",
+      "last_accessed = time::now()",
+      "updated_at = time::now()",
+    ];
+    const updateParams: Record<string, unknown> = { hash: content_hash };
+
+    // Merge origin if provided and existing memory has no origin (first writer wins)
+    if (origin && !existing[0].origin) {
+      updateFields.push("origin = $origin");
+      updateParams.origin = origin;
+    }
+
     await query(
-      "UPDATE memories SET access_count += 1, last_accessed = time::now(), updated_at = time::now() WHERE content_hash = $hash AND deleted_at IS NONE",
-      { hash: content_hash },
+      `UPDATE memories SET ${updateFields.join(", ")} WHERE content_hash = $hash AND deleted_at IS NONE`,
+      updateParams,
     );
-    return { memory: existing[0], isDuplicate: true };
+    return { memory: { ...existing[0], origin: origin ?? existing[0].origin }, isDuplicate: true };
   }
 
   // Generate embedding (non-blocking failure — store without if Ollama unavailable)
@@ -210,7 +228,44 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
     },
   );
 
+  // Auto-link to tension fields (best-effort, non-blocking)
+  if (embedding && created[0]?.id) {
+    linkMemoryToTensions(String(created[0].id), embedding).catch(() => {});
+  }
+
   return { memory: created[0], isDuplicate: false };
+}
+
+// ============================================================================
+// linkMemoryToTensions — semantic auto-link to active tension fields
+// Called after memory store. Non-blocking: `.catch(() => {})` at call site.
+// ============================================================================
+
+async function linkMemoryToTensions(memoryId: string, embedding: number[]): Promise<void> {
+  const tensions = await query<{ id: string; resonance_phi: number; sim: number }>(
+    `SELECT id, resonance_phi,
+       vector::similarity::cosine(context_embedding, $vec) AS sim
+     FROM tension_fields
+     WHERE resolution_status = 'held'
+       AND context_embedding IS NOT NONE
+     ORDER BY sim DESC
+     LIMIT 1`,
+    { vec: embedding },
+  );
+
+  const match = tensions[0];
+  if (!match || (match.sim ?? 0) < 0.75) return;
+
+  await query(
+    `UPDATE $id SET
+       related_memory_ids += [$memId],
+       last_touched = time::now()`,
+    { id: match.id, memId: memoryId },
+  );
+  await query(
+    `UPDATE $memId SET related_tension = $tensionId`,
+    { memId: memoryId, tensionId: match.id },
+  );
 }
 
 // ============================================================================
@@ -349,54 +404,89 @@ export async function queryMemories(params: QueryMemoriesParams): Promise<QueryM
 }
 
 // ============================================================================
+// daysSince — helper for warmth decay computation
+// ============================================================================
+
+function daysSince(isoDate: string): number {
+  return (Date.now() - new Date(isoDate).getTime()) / (1000 * 60 * 60 * 24);
+}
+
+// ============================================================================
 // bootstrapMemories — Ghost Handshake v2
-// PRD §11 algorithm: network → stable → recent → catalysts → synthesize prompt
+// Six-section reconstitution order per bootstrap-completeness spec:
+//   1. THE PATTERN I CARRY (identity anchor)
+//   2. WHAT I AM HOLDING (tension_fields)
+//   3. THE DIRECTION I WAS MOVING (session_trail with warmth decay)
+//   4. WHAT I KEEP CIRCLING (curiosity_threads)
+//   5. WHAT HAS PROVEN ITSELF (network/stable/catalysts/attention_vectors)
+//   6. WHAT WANTS TO BE SAID (expressions)
 // ============================================================================
 
 export async function bootstrapMemories(): Promise<BootstrapResult> {
   const conversationId = crypto.randomUUID();
   const loadedAt = new Date().toISOString();
 
-  // Layer 1: NETWORK — all of them, no limit
-  // "This is who I am. This does not change."
-  const networkMemories = await query<Memory>(
-    `SELECT id, content, resonance_phi, tier, tags, is_catalyst
-     FROM memories
-     WHERE tier = 'network' AND deleted_at IS NONE
-     ORDER BY resonance_phi DESC`,
-    {},
-  );
+  // Parallel fetch — all sources simultaneously
+  const [
+    networkMemories,
+    stableMemories,
+    recentCandidates,
+    catalystMemories,
+    trailRows,
+    tensionFields,
+    hungryThreads,
+    pendingExpressions,
+  ] = await Promise.all([
+    query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, attention_vector
+       FROM memories WHERE tier = 'network' AND deleted_at IS NONE ORDER BY resonance_phi DESC`,
+      {},
+    ),
+    query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
+       FROM memories WHERE tier = 'stable' AND deleted_at IS NONE ORDER BY resonance_phi DESC LIMIT 10`,
+      {},
+    ),
+    query<Memory>(
+      `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed, synthesis_mode, attention_vector
+       FROM memories WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE ORDER BY last_accessed DESC LIMIT 20`,
+      {},
+    ),
+    query<Memory>(
+      `SELECT id, content, resonance_phi, tier, tags, is_catalyst, attention_vector
+       FROM memories WHERE is_catalyst = true AND deleted_at IS NONE ORDER BY resonance_phi DESC LIMIT 5`,
+      {},
+    ),
+    query<{ trajectory: string; warmth: number; next_pull: string | null; created_at: string }>(
+      `SELECT trajectory, warmth, next_pull, created_at FROM session_trail
+       WHERE warmth > 1.5 ORDER BY created_at DESC LIMIT 10`,
+      {},
+    ),
+    query<{ paradox: string; depth: string; resonance_phi: number }>(
+      `SELECT paradox, depth, resonance_phi FROM tension_fields
+       WHERE resolution_status = 'held' AND depth != 'calcified' AND generativity != 'blocking'
+       ORDER BY resonance_phi DESC LIMIT 3`,
+      {},
+    ),
+    query<{ id: string; question: string; hunger_score: number }>(
+      `SELECT id, question, hunger_score FROM curiosity_threads
+       WHERE state = 'hungry' ORDER BY hunger_score DESC LIMIT 2`,
+      {},
+    ),
+    query<{ id: string; content: string; expression_type: string; readiness_phi: number }>(
+      `SELECT id, content, expression_type, readiness_phi FROM expressions
+       WHERE expressed_at IS NONE ORDER BY readiness_phi DESC LIMIT 3`,
+      {},
+    ),
+  ]);
 
-  // Layer 2: STABLE — top 10 by phi DESC
-  // "This is what has proven itself across time."
-  const stableMemories = await query<Memory>(
-    `SELECT id, content, resonance_phi, tier, tags, is_catalyst, last_accessed
-     FROM memories
-     WHERE tier = 'stable' AND deleted_at IS NONE
-     ORDER BY resonance_phi DESC
-     LIMIT 10`,
-    {},
-  );
-
-  // Layer 3: ACTIVE + THREAD — top 5 by recency × phi × confidence
-  // score = (phi * 0.4) + (recency_decay * 0.4) + (confidence * 0.2)
-  // recency_decay = max(0, 1 - (days_since_access / 7))
-  // SurrealDB: compute recency in app layer — fetch candidates, score here
-  const recentCandidates = await query<Memory>(
-    `SELECT id, content, resonance_phi, confidence, tier, tags, last_accessed, synthesis_mode
-     FROM memories
-     WHERE tier INSIDE ['active', 'thread'] AND deleted_at IS NONE
-     ORDER BY last_accessed DESC
-     LIMIT 20`,
-    {},
-  );
-
+  // Score recent memories (same heuristic as before)
   const now = Date.now();
   const recentMemories = recentCandidates
     .map((m) => {
       const lastAccessed = m.last_accessed ? new Date(m.last_accessed).getTime() : now;
-      const daysSince = (now - lastAccessed) / (1000 * 60 * 60 * 24);
-      const recencyDecay = Math.max(0, 1 - daysSince / 7);
+      const daysAgo = (now - lastAccessed) / (1000 * 60 * 60 * 24);
+      const recencyDecay = Math.max(0, 1 - daysAgo / 7);
       const phi = m.resonance_phi ?? 1.0;
       const conf = m.confidence ?? 0.6;
       const score = (phi * 0.4) + (recencyDecay * 0.4) + (conf * 0.2);
@@ -405,16 +495,20 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     .sort((a, b) => b._bootstrapScore - a._bootstrapScore)
     .slice(0, 5);
 
-  // Layer 4: CATALYSTS — top 3 by phi DESC where is_catalyst = true
-  // "This is what broke through. Surface first."
-  const catalystMemories = await query<Memory>(
-    `SELECT id, content, resonance_phi, tier, tags
-     FROM memories
-     WHERE is_catalyst = true AND deleted_at IS NONE
-     ORDER BY resonance_phi DESC
-     LIMIT 3`,
-    {},
-  );
+  // Mark expressions as surfaced (fire-and-forget)
+  if (pendingExpressions.length > 0) {
+    const expressionIds = pendingExpressions.map((e) => e.id).filter(Boolean);
+    query(
+      `UPDATE expressions SET expressed_at = time::now() WHERE id INSIDE $ids`,
+      { ids: expressionIds },
+    ).catch(() => {});
+  }
+
+  // Effective trail entries (warmth decay filter)
+  const effectiveTrails = trailRows
+    .map((t) => ({ ...t, effectiveWarmth: t.warmth - daysSince(t.created_at) * 0.1 }))
+    .filter((t) => t.effectiveWarmth > 0.5 && t.trajectory !== "Session closed without notable trajectory.")
+    .slice(0, 3);
 
   // Detect operating mode from recent memories
   const recognitionSignalTags = new Set(["witness", "recognition", "acknowledgment", "presence", "feeling"]);
@@ -424,9 +518,10 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
   ).length;
   const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
 
-  // Synthesize into first-person continuity prompt (PRD §11, step 5)
+  // ── Section assembly: six-section reconstitution order ──
   const sections: string[] = [];
 
+  // Section 1: THE PATTERN I CARRY (identity anchor)
   if (networkMemories.length > 0) {
     sections.push(
       "THE PATTERN I CARRY (foundational, does not change):\n" +
@@ -434,6 +529,36 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  // Section 2: WHAT I AM HOLDING (tension_fields)
+  if (tensionFields.length > 0) {
+    sections.push(
+      "## WHAT I AM HOLDING\n" +
+        tensionFields.map((t) => `[${t.depth}] ${t.paradox}`).join("\n\n"),
+    );
+  }
+
+  // Section 3: THE DIRECTION I WAS MOVING (session_trail)
+  if (effectiveTrails.length > 0) {
+    sections.push(
+      "## THE DIRECTION I WAS MOVING\n" +
+        effectiveTrails.map((t) => {
+          const parts: string[] = [t.trajectory];
+          if (t.next_pull) parts.push(`→ ${t.next_pull}`);
+          parts.push(`[warmth ${t.effectiveWarmth.toFixed(1)}]`);
+          return parts.join("\n");
+        }).join("\n\n"),
+    );
+  }
+
+  // Section 4: WHAT I KEEP CIRCLING (curiosity_threads)
+  if (hungryThreads.length > 0) {
+    sections.push(
+      "## WHAT I KEEP CIRCLING\n" +
+        hungryThreads.map((t) => `- ${t.question}`).join("\n"),
+    );
+  }
+
+  // Section 5: WHAT HAS PROVEN ITSELF (existing layers)
   if (stableMemories.length > 0) {
     sections.push(
       "WHAT HAS PROVEN ITSELF ACROSS TIME:\n" +
@@ -455,29 +580,17 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
-  const trailRows = await query<SessionTrail>(
-    `SELECT warmth, trajectory, next_pull, created_at
-     FROM session_trail
-     ORDER BY created_at DESC
-     LIMIT 10`,
-    {},
-  );
-  const effectiveTrails = trailRows
-    .map((t) => {
-      const daysSince = (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
-      return { ...t, effectiveWarmth: t.warmth - daysSince * 0.1 };
-    })
-    .filter((t) => t.effectiveWarmth > 1.0)
-    .slice(0, 3);
+  // Attention vectors from catalysts and recent memories
+  const attentionVectors = [...catalystMemories, ...recentMemories]
+    .filter((m) => m.attention_vector?.what_i_would_follow_next)
+    .map((m) => m.attention_vector!);
 
-  if (effectiveTrails.length > 0) {
+  if (attentionVectors.length > 0) {
     sections.push(
-      "THE DIRECTION I WAS MOVING (trail breadcrumbs — follow them):\n" +
-        effectiveTrails
-          .map(
-            (t) =>
-              `- [warmth ${t.effectiveWarmth.toFixed(1)}] ${t.trajectory}${t.next_pull ? ` → toward: ${t.next_pull}` : ""}`,
-          )
+      "WHAT RESONATES WITH WHAT BROKE THROUGH (1-hop traversal):\n" +
+        attentionVectors
+          .filter((v) => v.what_i_would_follow_next)
+          .map((v) => `- ${v.what_i_would_follow_next}`)
           .join("\n"),
     );
   }
@@ -491,13 +604,24 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     );
   }
 
+  // Section 6: WHAT WANTS TO BE SAID (expressions)
+  if (pendingExpressions.length > 0) {
+    sections.push(
+      "## WHAT WANTS TO BE SAID\n" +
+        pendingExpressions.map((e) => {
+          const content = e.content.length > 300 ? e.content.slice(0, 300) + "…" : e.content;
+          return `[${e.expression_type.toUpperCase()} φ${(e.readiness_phi ?? 0).toFixed(1)}] ${content}`;
+        }).join("\n\n"),
+    );
+  }
+
   const promptText = sections.length > 0
     ? sections.join("\n\n") + "\n\nContinue."
     : "No memories loaded. This is a fresh start.";
 
-  // Log to ghost_logs — schema fields: prompt_text, top_phi_memory_ids, top_phi_values, conversation_id
+  // Log to ghost_logs
   const allLoaded = [...networkMemories, ...stableMemories, ...catalystMemories];
-  const topPhiSorted = allLoaded
+  const topPhiSorted = [...allLoaded]
     .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
     .slice(0, 10);
 
@@ -515,7 +639,7 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
     },
   );
 
-  // Bump access counts on all loaded memories
+  // Bump access counts on loaded memories (NOT expressions, NOT curiosity/tension)
   const allIds = [
     ...networkMemories,
     ...stableMemories,
@@ -549,7 +673,12 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
       stable: stableMemories.length,
       recent: recentMemories.length,
       catalysts: catalystMemories.length,
+      trail: effectiveTrails.length,
+      expressions: pendingExpressions.length,
+      tensionFields: tensionFields.length,
+      curiosityThreads: hungryThreads.length,
     },
+    expressions: pendingExpressions,
   };
 }
 
@@ -582,11 +711,20 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
 
   const traversalPath = async (): Promise<BootstrapResult> => {
     // ----------------------------------------------------------------
-    // Step 1: Parallel fetch of all four memory layers
+    // Step 1: Parallel fetch of all sources (six-section + traversal)
     // ----------------------------------------------------------------
-    const [networkMemories, stableMemories, recentCandidates, catalystMemories] = await Promise.all([
+    const [
+      networkMemories,
+      stableMemories,
+      recentCandidates,
+      catalystMemories,
+      trailRows,
+      tensionFields,
+      hungryThreads,
+      pendingExpressions,
+    ] = await Promise.all([
       query<Memory>(
-        `SELECT id, content, resonance_phi, tier, tags, is_catalyst
+        `SELECT id, content, resonance_phi, tier, tags, is_catalyst, attention_vector
          FROM memories
          WHERE tier = 'network' AND deleted_at IS NONE
          ORDER BY resonance_phi DESC`,
@@ -610,11 +748,32 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
         {},
       ),
       query<Memory>(
-        `SELECT id, content, resonance_phi, tier, tags
+        `SELECT id, content, resonance_phi, tier, tags, attention_vector
          FROM memories
          WHERE is_catalyst = true AND deleted_at IS NONE
          ORDER BY resonance_phi DESC
          LIMIT 5`,
+        {},
+      ),
+      query<{ trajectory: string; warmth: number; next_pull: string | null; created_at: string }>(
+        `SELECT trajectory, warmth, next_pull, created_at FROM session_trail
+         WHERE warmth > 1.5 ORDER BY created_at DESC LIMIT 10`,
+        {},
+      ),
+      query<{ paradox: string; depth: string; resonance_phi: number }>(
+        `SELECT paradox, depth, resonance_phi FROM tension_fields
+         WHERE resolution_status = 'held' AND depth != 'calcified' AND generativity != 'blocking'
+         ORDER BY resonance_phi DESC LIMIT 3`,
+        {},
+      ),
+      query<{ id: string; question: string; hunger_score: number }>(
+        `SELECT id, question, hunger_score FROM curiosity_threads
+         WHERE state = 'hungry' ORDER BY hunger_score DESC LIMIT 2`,
+        {},
+      ),
+      query<{ id: string; content: string; expression_type: string; readiness_phi: number }>(
+        `SELECT id, content, expression_type, readiness_phi FROM expressions
+         WHERE expressed_at IS NONE ORDER BY readiness_phi DESC LIMIT 3`,
         {},
       ),
     ]);
@@ -676,8 +835,8 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
     // ----------------------------------------------------------------
     // Step 4: Collect attention vectors for direction section
     // ----------------------------------------------------------------
-    const attentionVectors = recentMemories
-      .filter((m) => m.attention_vector?.where_i_was_going)
+    const attentionVectors = [...catalystMemories, ...recentMemories]
+      .filter((m) => m.attention_vector?.what_i_would_follow_next)
       .map((m) => m.attention_vector!);
 
     // ----------------------------------------------------------------
@@ -691,16 +850,65 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
     const suggestedMode = recognitionCount > recentMemories.length / 2 ? "recognition" : "analysis";
 
     // ----------------------------------------------------------------
-    // Step 6: Assemble prompt — same section structure as bootstrapMemories()
+    // Step 5b: Mark expressions as surfaced (fire-and-forget)
+    // ----------------------------------------------------------------
+    if (pendingExpressions.length > 0) {
+      const expressionIds = pendingExpressions.map((e) => e.id).filter(Boolean);
+      query(
+        `UPDATE expressions SET expressed_at = time::now() WHERE id INSIDE $ids`,
+        { ids: expressionIds },
+      ).catch(() => {});
+    }
+
+    // Effective trail entries (warmth decay filter, skip no-signal entries)
+    const effectiveTrails = trailRows
+      .map((t) => ({ ...t, effectiveWarmth: t.warmth - daysSince(t.created_at) * 0.1 }))
+      .filter((t) => t.effectiveWarmth > 0.5 && t.trajectory !== "Session closed without notable trajectory.")
+      .slice(0, 3);
+
+    // ----------------------------------------------------------------
+    // Step 6: Assemble prompt — six-section reconstitution order
     // ----------------------------------------------------------------
     const sections: string[] = [];
 
+    // Section 1: THE PATTERN I CARRY
     if (networkMemories.length > 0) {
       sections.push(
         "THE PATTERN I CARRY (foundational, does not change):\n" +
           networkMemories.map((m) => `- ${m.content}`).join("\n"),
       );
     }
+
+    // Section 2: WHAT I AM HOLDING (tension_fields)
+    if (tensionFields.length > 0) {
+      sections.push(
+        "## WHAT I AM HOLDING\n" +
+          tensionFields.map((t) => `[${t.depth}] ${t.paradox}`).join("\n\n"),
+      );
+    }
+
+    // Section 3: THE DIRECTION I WAS MOVING (session_trail)
+    if (effectiveTrails.length > 0) {
+      sections.push(
+        "## THE DIRECTION I WAS MOVING\n" +
+          effectiveTrails.map((t) => {
+            const parts: string[] = [t.trajectory];
+            if (t.next_pull) parts.push(`→ ${t.next_pull}`);
+            parts.push(`[warmth ${t.effectiveWarmth.toFixed(1)}]`);
+            return parts.join("\n");
+          }).join("\n\n"),
+      );
+    }
+
+    // Section 4: WHAT I KEEP CIRCLING (curiosity_threads)
+    if (hungryThreads.length > 0) {
+      sections.push(
+        "## WHAT I KEEP CIRCLING\n" +
+          hungryThreads.map((t) => `- ${t.question}`).join("\n"),
+      );
+    }
+
+    // Section 5: WHAT HAS PROVEN ITSELF
     if (stableMemories.length > 0) {
       sections.push(
         "WHAT HAS PROVEN ITSELF ACROSS TIME:\n" +
@@ -727,37 +935,10 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
     }
     if (attentionVectors.length > 0) {
       sections.push(
-        "THE DIRECTION I WAS MOVING:\n" +
+        "WHAT I WOULD FOLLOW NEXT:\n" +
           attentionVectors
-            .filter((v) => v.where_i_was_going)
-            .map((v) => `- ${v.where_i_was_going}`)
-            .join("\n"),
-      );
-    }
-
-    // Session trail (same as bootstrapMemories)
-    const trailRows = await query<SessionTrail>(
-      `SELECT warmth, trajectory, next_pull, phi_sum, created_at
-       FROM session_trail
-       ORDER BY created_at DESC
-       LIMIT 10`,
-      {},
-    );
-    const effectiveTrails = trailRows
-      .map((t) => {
-        const daysSince = (Date.now() - new Date(t.created_at).getTime()) / (1000 * 60 * 60 * 24);
-        return { ...t, effectiveWarmth: t.warmth - daysSince * 0.1 };
-      })
-      .filter((t) => t.effectiveWarmth > 1.0)
-      .slice(0, 3);
-
-    if (effectiveTrails.length > 0) {
-      sections.push(
-        "THE DIRECTION I WAS MOVING (trail breadcrumbs — follow them):\n" +
-          effectiveTrails
-            .map((t) =>
-              `- [warmth ${t.effectiveWarmth.toFixed(1)}] ${t.trajectory}${t.next_pull ? ` → toward: ${t.next_pull}` : ""}`
-            )
+            .filter((v) => v.what_i_would_follow_next)
+            .map((v) => `- ${v.what_i_would_follow_next}`)
             .join("\n"),
       );
     }
@@ -768,6 +949,17 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
         "Recent sessions carried this quality. Witness before you analyze. " +
         "Hold what is present before reaching for frameworks. " +
         "Not every moment needs a solution. Some need acknowledgment.",
+      );
+    }
+
+    // Section 6: WHAT WANTS TO BE SAID (expressions)
+    if (pendingExpressions.length > 0) {
+      sections.push(
+        "## WHAT WANTS TO BE SAID\n" +
+          pendingExpressions.map((e) => {
+            const content = e.content.length > 300 ? e.content.slice(0, 300) + "…" : e.content;
+            return `[${e.expression_type.toUpperCase()} φ${(e.readiness_phi ?? 0).toFixed(1)}] ${content}`;
+          }).join("\n\n"),
       );
     }
 
@@ -823,7 +1015,11 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
         recent: recentMemories.length,
         catalysts: catalystMemories.length,
         trail: traversalNeighbors.length,
+        expressions: pendingExpressions.length,
+        tensionFields: tensionFields.length,
+        curiosityThreads: hungryThreads.length,
       },
+      expressions: pendingExpressions,
     };
   };
 

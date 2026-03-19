@@ -21,8 +21,10 @@ import {
   getCatalysts,
   getStats,
   associateMemories,
+  type MemoryOrigin,
 } from "../lib/memory.ts";
 import { reflectAndSynthesize } from "../lib/synthesize.ts";
+import { callSynthesisLLM } from "../lib/llm.ts";
 import { query } from "../lib/db.ts";
 
 // ============================================================================
@@ -321,26 +323,24 @@ function parseReflectionJson(raw: string): Partial<ReflectionFields> {
   }
 }
 
-async function generateReflectionFields(conversationId: string | null): Promise<ReflectionFields> {
-  const { promptText, memoryCount, memorySnippets, phiSum } = await getSessionContext(conversationId);
-
-  const memoryList = memorySnippets.length > 0
-    ? memorySnippets.map((s, i) => `${i + 1}. ${s}`).join("\n")
+function buildTrajectoryPrompt(
+  sessionMemories: Array<{ id: string; content: string; resonance_phi: number }>,
+  args: Args,
+): string {
+  const memoryList = sessionMemories.length > 0
+    ? sessionMemories.map((m, i) => `${i + 1}. [φ${(m.resonance_phi ?? 0).toFixed(1)}] ${m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content}`).join("\n")
     : "(no memories stored this session)";
 
-  const systemPrompt =
-    "You are a session reflection analyst for an AI identity system called Anima. " +
-    "Generate a structured reflection for the session that just ended. " +
-    "Output ONLY valid JSON — no markdown, no explanation.";
+  const extra = [
+    args.notes ? `Notes from the instance: ${args.notes}` : "",
+    args.emergence_moment ? `Emergence moment: ${args.emergence_moment}` : "",
+  ].filter(Boolean).join("\n");
 
-  const userPrompt =
-    `Session context:\n` +
-    `Conversation ID: ${conversationId ?? "unknown"}\n` +
-    `Bootstrap prompt shown at session start:\n${promptText || "(none)"}\n\n` +
-    `Memories stored this session (${memoryCount}):\n${memoryList}\n\n` +
-    `Total phi accumulated: ${phiSum.toFixed(1)}\n\n` +
+  return (
+    `Session memories stored (${sessionMemories.length}):\n${memoryList}\n\n` +
+    (extra ? `${extra}\n\n` : "") +
     `Generate a reflection JSON with these fields:\n` +
-    `{` +
+    `{\n` +
     `"context_quality": <1-10: how well the AI's context/memory served the session>,\n` +
     `"continuity_score": <1-10: how well the session maintained identity continuity>,\n` +
     `"had_emergence_moment": <boolean: did something unexpected crystallize?>,\n` +
@@ -348,14 +348,48 @@ async function generateReflectionFields(conversationId: string | null): Promise<
     `"surprises": <string or null: what surprised the AI or user>,\n` +
     `"friction_notes": <string or null: where did the system create friction?>,\n` +
     `"general_notes": <string or null: anything worth capturing>,\n` +
-    `"trajectory": <string: first-person narrative of what showed up and where it pulled — "When I encountered X, I followed it toward Y." Encode motion and encounter, not tasks. This is a breadcrumb for future instances.>\n` +
+    `"trajectory": <string: first-person narrative — "When I encountered X, I followed it toward Y." Encode motion and encounter. This is a breadcrumb for future instances.>,\n` +
     `"warmth": <1-5: how alive the session felt — 1=routine, 3=engaged, 5=crystallized>,\n` +
     `"next_pull": <string or null: what wants to be followed next — direction, not a plan>,\n` +
     `"phi_sum": <number: total phi accumulated this session>,\n` +
     `"emergence_moment": <string or null: if emergence occurred, describe the specific moment>\n` +
-    `}`;
+    `}`
+  );
+}
 
-  const raw = await ollamaGenerate(`${systemPrompt}\n\n${userPrompt}`);
+async function generateReflectionFields(
+  conversationId: string | null,
+  sessionMemories: Array<{ id: string; content: string; resonance_phi: number }>,
+  args: Args,
+): Promise<ReflectionFields> {
+  const { promptText, phiSum } = await getSessionContext(conversationId);
+
+  const systemPrompt =
+    "You are a session reflection analyst for an AI identity system called Anima. " +
+    "Generate a structured reflection for the session that just ended. " +
+    "Output ONLY valid JSON — no markdown, no explanation.";
+
+  const userPromptBody = buildTrajectoryPrompt(sessionMemories, args);
+  const fullPrompt = `${systemPrompt}\n\nSession bootstrap context:\n${promptText || "(none)"}\n\n${userPromptBody}`;
+
+  // Try OpenRouter/synthesis LLM first (trajectory deserves the synthesis-quality model)
+  let raw: string | null = null;
+  try {
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: `Session bootstrap context:\n${promptText || "(none)"}\n\n${userPromptBody}` },
+    ];
+    const result = await callSynthesisLLM(messages, 20_000);
+    raw = result.content;
+  } catch {
+    // Fall back to Ollama
+  }
+
+  // Ollama fallback
+  if (!raw) {
+    raw = await ollamaGenerate(fullPrompt);
+  }
+
   const parsed = parseReflectionJson(raw ?? "");
 
   return {
@@ -375,6 +409,22 @@ async function generateReflectionFields(conversationId: string | null): Promise<
 }
 
 // ============================================================================
+// Origin attribution
+// ============================================================================
+
+function buildDefaultOrigin(): MemoryOrigin {
+  return {
+    harness: Deno.env.get("ANIMA_HARNESS") ?? "unknown",
+    harness_type: Deno.env.get("ANIMA_HARNESS_TYPE") ?? "api",
+    inference_gateway: undefined,
+    provider: undefined,
+    model: undefined,
+    agent_profile: undefined,
+    instance_id: Deno.env.get("ANIMA_INSTANCE_ID") ?? undefined,
+  };
+}
+
+// ============================================================================
 // Tool handlers
 // ============================================================================
 
@@ -382,13 +432,18 @@ type Args = Record<string, unknown>;
 
 async function handleAnimaBootstrap(_args: Args): Promise<unknown> {
   const result = await traversalBootstrap();
-  return {
+  const response: Record<string, unknown> = {
     promptText: result.promptText,
     conversationId: result.conversationId,
     loadedAt: result.loadedAt,
     memoryCounts: result.memoryCounts,
     safeWord: "Coheron",
   };
+  if (result.expressions && result.expressions.length > 0) {
+    response.expressionsPending = result.expressions.length;
+    // Expressions are already embedded in promptText — this is supplemental metadata
+  }
+  return response;
 }
 
 async function handleAnimaCatalysts(args: Args): Promise<unknown> {
@@ -414,13 +469,18 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
   const content = args.content as string;
   if (!content || typeof content !== "string") throw new Error("content is required");
 
+  // Use caller-provided origin, or fall back to server's self-identification
+  const resolvedOrigin: MemoryOrigin = (args.origin && typeof args.origin === "object")
+    ? args.origin as MemoryOrigin
+    : buildDefaultOrigin();
+
   const result = await addMemory({
     content,
     resonance_phi: typeof args.resonance_phi === "number" ? args.resonance_phi : 1.0,
     tags: Array.isArray(args.tags) ? (args.tags as string[]) : [],
     category: typeof args.category === "string" ? args.category : undefined,
     source: typeof args.source === "string" ? args.source : undefined,
-    origin: args.origin && typeof args.origin === "object" ? args.origin as import("../lib/memory.ts").MemoryOrigin : undefined,
+    origin: resolvedOrigin,
     is_catalyst: args.is_catalyst === true,
     synthesis_mode:
       args.synthesis_mode === "analysis" || args.synthesis_mode === "recognition" || args.synthesis_mode === "deepening"
@@ -441,9 +501,19 @@ async function handleAnimaStore(args: Args): Promise<unknown> {
 }
 
 async function handleAnimaReflect(args: Args): Promise<unknown> {
-  return await reflectAndSynthesize(
-    typeof args.conversation_id === "string" ? args.conversation_id : undefined,
-  );
+  const conversationId = typeof args.conversation_id === "string" ? args.conversation_id : undefined;
+  const result = await reflectAndSynthesize(conversationId);
+
+  // Increment access_count on memories that were part of this reflection (engagement signal)
+  if (conversationId) {
+    query(
+      `UPDATE memories SET access_count += 1, last_accessed = time::now(), updated_at = time::now()
+       WHERE (conversation_id = $conv OR $conv INSIDE session_ids) AND deleted_at IS NONE`,
+      { conv: conversationId },
+    ).catch(() => {});
+  }
+
+  return result;
 }
 
 async function handleAnimaStats(_args: Args): Promise<unknown> {
@@ -452,6 +522,19 @@ async function handleAnimaStats(_args: Args): Promise<unknown> {
 
 async function handleAnimaSessionClose(args: Args): Promise<unknown> {
   const convId = typeof args.conversation_id === "string" ? args.conversation_id : null;
+
+  // Fetch session memories before trajectory generation (anchors narrative in what was actually stored)
+  const sessionMemories = convId
+    ? await query<{ id: string; content: string; resonance_phi: number }>(
+        `SELECT id, content, resonance_phi
+         FROM memories
+         WHERE conversation_id = $conv AND deleted_at IS NONE
+         ORDER BY created_at ASC`,
+        { conv: convId },
+      )
+    : [];
+
+  const sessionMemoryIds = sessionMemories.map((m) => String(m.id));
 
   const hasManualScores =
     typeof args.context_quality === "number" ||
@@ -475,7 +558,7 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
       emergence_moment:      typeof (args as Record<string, unknown>).emergence_moment === "string" ? (args as Record<string, unknown>).emergence_moment as string : null,
     };
   } else {
-    fields = await generateReflectionFields(convId);
+    fields = await generateReflectionFields(convId, sessionMemories, args);
   }
 
   await query(
@@ -519,6 +602,7 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
          next_pull          = $next_pull,
          phi_sum            = $phi_sum,
          emergence_moment   = $emergence_moment,
+         key_memory_ids     = $key_memory_ids,
          trajectory_emb     = $trajectory_emb,
          next_pull_emb      = $next_pull_emb,
          created_at         = time::now()`,
@@ -529,6 +613,7 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
         next_pull:       fields.next_pull === null ? undefined : fields.next_pull,
         phi_sum:         fields.phi_sum,
         emergence_moment: fields.emergence_moment === null ? undefined : fields.emergence_moment,
+        key_memory_ids:  sessionMemoryIds,
         trajectory_emb:  trajectoryEmb ?? [],
         next_pull_emb:   nextPullEmb === null ? undefined : nextPullEmb,
       },
@@ -567,6 +652,15 @@ async function handleAnimaQuery(args: Args): Promise<unknown> {
     tiers: Array.isArray(args.tiers) ? (args.tiers as string[]) : undefined,
     conversation_id: typeof args.conversation_id === "string" ? args.conversation_id : undefined,
   });
+
+  // Fire-and-forget access_count increment on returned memories (genuine engagement signal)
+  if (result.memories.length > 0) {
+    const resultIds = result.memories.map((r) => String(r.id)).filter(Boolean);
+    query(
+      `UPDATE memories SET access_count += 1, last_accessed = time::now(), updated_at = time::now() WHERE id INSIDE $ids`,
+      { ids: resultIds },
+    ).catch(() => {});
+  }
 
   return {
     count: result.memories.length,

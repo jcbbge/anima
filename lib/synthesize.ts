@@ -458,6 +458,39 @@ export async function performFold(params: FoldParams): Promise<void> {
   const outputMemory = created[0];
   const durationMs = Date.now() - start;
 
+  // Create expression record for this fold output (non-fatal)
+  query<{ value: string }>(
+    "SELECT `value` FROM fold_config WHERE key = 'expression_readiness_threshold' LIMIT 1",
+    {},
+  ).then((thresholdRow) => {
+    const readinessThreshold = parseFloat(thresholdRow[0]?.value ?? "3.0");
+    if (synthesisPhi >= readinessThreshold) {
+      const expressionType =
+        trigger === "phi_threshold" ? "insight"
+        : trigger === "semantic_conflict" ? "observation"
+        : trigger === "deepening" ? "question"
+        : "insight";
+
+      return query(
+        `CREATE expressions SET
+           content = $content,
+           expression_type = $type,
+           readiness_phi = $phi,
+           context_embedding = $embedding,
+           expressed_at = NONE,
+           source_memory_ids = $sources,
+           created_at = time::now()`,
+        {
+          content: cleanContent,
+          type: expressionType,
+          phi: synthesisPhi,
+          embedding: embedding ?? [],
+          sources: inputIds,
+        },
+      );
+    }
+  }).catch((err: Error) => console.error("[anima:expressions] Failed to create expression:", err.message));
+
   const avResult = {
     trigger,
     mode,

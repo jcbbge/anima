@@ -70,6 +70,7 @@ curl -s -X POST \
     last_accessed = time::now(),
     session_ids = [],
     source = 'hook',
+    origin = {harness: 'claude-code', harness_type: 'cli'},
     tags = $TAGS_JSON,
     created_at = time::now(),
     updated_at = time::now()" \

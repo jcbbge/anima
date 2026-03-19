@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jcbbge.anima-mcp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/deno</string>
+        <string>run</string>
+        <string>--allow-net</string>
+        <string>--allow-env</string>
+        <string>--allow-read</string>
+        <string>--allow-run=launchctl</string>
+        <string>/Users/jcbbge/anima/mcp-server/index.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jcbbge/anima</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SURREAL_URL</key>
+        <string>ws://127.0.0.1:8002/rpc</string>
+        <key>SURREAL_NS</key>
+        <string>anima</string>
+        <key>SURREAL_DB</key>
+        <string>memory</string>
+        <key>SURREAL_USER</key>
+        <string>root</string>
+        <key>SURREAL_PASS</key>
+        <string>root</string>
+        <key>ANIMA_MCP_PORT</key>
+        <string>3098</string>
+        <key>EMBEDDING_DIM</key>
+        <string>768</string>
+        <key>OLLAMA_URL</key>
+        <string>http://localhost:8001</string>
+        <key>OLLAMA_MODEL</key>
+        <string>nomic-embed-text</string>
+        <!-- Layer 2 origin attribution: identifies this server as the anima-mcp harness -->
+        <key>ANIMA_HARNESS</key>
+        <string>anima-mcp</string>
+        <key>ANIMA_HARNESS_TYPE</key>
+        <string>mcp-http</string>
+        <key>KOTADB_MAX_INSTANCES</key>
+        <string>4</string>
+        <key>OLLAMA_MAX_LOADED_MODELS</key>
+        <string>2</string>
+        <key>OLLAMA_NUM_PARALLEL</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/Users/jcbbge/.opencode/bin:/Users/jcbbge/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- External API keys (OpenRouter, Anthropic) must NOT be placed here.
+             The daemon loads them from .env at runtime via the loadEnv() function. -->
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/anima-mcp.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/anima-mcp.error.log</string>
+</dict>
+</plist>

@@ -136,17 +136,17 @@ async function processThread(thread: CuriosityThread): Promise<void> {
     log(`Memory stored: ${String(result.memory.id)}`);
   }
 
-  // Update the curiosity thread: fed, increment count, record timestamp
+  // Update the curiosity thread: reset to hungry with refreshed last_fed (so it can re-hunger)
   await query(
     `UPDATE $id SET
-       state = 'fed',
+       state = 'hungry',
        activation_count = activation_count + 1,
        last_fed = time::now(),
        updated_at = time::now()`,
     { id: thread.id },
   );
 
-  log(`Thread updated: state=fed, activation_count=${thread.activation_count + 1}`);
+  log(`Thread updated: state=hungry (re-hungers from now), activation_count=${thread.activation_count + 1}`);
 }
 
 // ============================================================================
@@ -164,12 +164,30 @@ async function runCycle(): Promise<void> {
   try {
     log("Running curiosity cycle...");
 
+    // Recompute hunger_score for all non-resolved threads
+    // formula: (days_since_last_fed + 1) * resonance_phi
+    await query(
+      `UPDATE curiosity_threads
+       SET hunger_score = math::round(
+         (math::floor((time::unix() - time::unix(last_fed)) / 86400) + 1) * resonance_phi * 10
+       ) / 10
+       WHERE state != 'resolved' AND state != 'dormant'`,
+      {},
+    ).catch((err: Error) => log(`Hunger recompute failed (non-fatal): ${err.message}`));
+
+    // Read threshold from fold_config
+    const thresholdRow = await query<{ value: string }>(
+      "SELECT `value` FROM fold_config WHERE key = 'curiosity_hunger_threshold' LIMIT 1",
+      {},
+    );
+    const hungerThreshold = parseFloat(thresholdRow[0]?.value ?? "5.0");
+
     const threads = await query<CuriosityThread>(
       `SELECT * FROM curiosity_threads
-       WHERE state = 'hungry'
+       WHERE state = 'hungry' AND hunger_score > $threshold
        ORDER BY hunger_score DESC
        LIMIT 3`,
-      {},
+      { threshold: hungerThreshold },
     );
 
     if (threads.length === 0) {
