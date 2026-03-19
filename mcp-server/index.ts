@@ -152,19 +152,26 @@ const TOOLS = [
     name: "anima_session_close",
     description:
       "Record a session reflection in Anima. Captures subjective quality scores, emergence moments, " +
-      "friction, and notes. Writes to conversation_reflections table. " +
-      "Call at the end of a session to build the observability record over time.",
+      "friction, and notes. Writes to conversation_reflections and session_trail tables. " +
+      "When called with no arguments, auto-generates all fields via Ollama (qwen2.5:0.5b) — " +
+      "fetches ghost_log + session memories, generates scores, warmth, trajectory, next_pull, and embeddings. " +
+      "Call at the end of every session to build the observability record and navigation breadcrumbs.",
     inputSchema: {
       type: "object",
       properties: {
         conversation_id: { type: "string", description: "Conversation ID from anima_bootstrap." },
-        context_quality: { type: "number", description: "How well Anima's context matched the session. 1–10." },
-        continuity_score: { type: "number", description: "How well identity/continuity held across the session. 1–10." },
-        had_emergence_moment: { type: "boolean", description: "Did something unexpected or generative emerge?" },
-        needed_correction: { type: "boolean", description: "Did Anima need to be corrected or redirected?" },
-        surprises: { type: "string", description: "What surprised you or Anima during the session?" },
-        friction_notes: { type: "string", description: "Where did the system create friction or feel off?" },
-        general_notes: { type: "string", description: "Any other observations worth capturing." },
+        context_quality: { type: "number", description: "How well Anima's context matched the session. 1–10. Auto-generated if omitted." },
+        continuity_score: { type: "number", description: "How well identity/continuity held across the session. 1–10. Auto-generated if omitted." },
+        had_emergence_moment: { type: "boolean", description: "Did something unexpected or generative emerge? Auto-generated if omitted." },
+        needed_correction: { type: "boolean", description: "Did Anima need to be corrected or redirected? Auto-generated if omitted." },
+        surprises: { type: "string", description: "What surprised you or Anima during the session? Auto-generated if omitted." },
+        friction_notes: { type: "string", description: "Where did the system create friction or feel off? Auto-generated if omitted." },
+        general_notes: { type: "string", description: "Any other observations worth capturing. Auto-generated if omitted." },
+        trajectory: { type: "string", description: "Breadcrumb narrative — what showed up and where it pulled. Auto-generated if omitted." },
+        warmth: { type: "number", description: "Session warmth 1–5. Auto-generated if omitted." },
+        next_pull: { type: "string", description: "What wants to be followed next. Auto-generated if omitted." },
+        phi_sum: { type: "number", description: "Total phi accumulated this session. Auto-generated if omitted." },
+        emergence_moment: { type: "string", description: "Specific emergence moment description. Auto-generated if omitted." },
       },
       required: [],
     },
@@ -186,6 +193,186 @@ const TOOLS = [
     },
   },
 ];
+
+// ============================================================================
+// Ollama LLM — local reflection generation
+// ============================================================================
+
+const OLLAMA_URL   = Deno.env.get("OLLAMA_URL")     ?? "http://localhost:11434";
+const OLLAMA_MODEL = Deno.env.get("OLLAMA_MODEL")   ?? "qwen2.5:0.5b";
+
+interface ReflectionFields {
+  context_quality: number;
+  continuity_score: number;
+  had_emergence_moment: boolean;
+  needed_correction: boolean;
+  surprises: string | null;
+  friction_notes: string | null;
+  general_notes: string | null;
+  trajectory: string;
+  warmth: number;
+  next_pull: string | null;
+  phi_sum: number;
+  emergence_moment: string | null;
+}
+
+async function ollamaGenerate(prompt: string, timeoutMs = 30_000): Promise<string | null> {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: 0.6, num_predict: 400 },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      console.error(`[anima:ollama] generate error ${res.status}`);
+      return null;
+    }
+    const data = await res.json() as { response?: string };
+    return (data.response ?? "").trim() || null;
+  } catch (err) {
+    console.error(`[anima:ollama] generate failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+async function ollamaEmbed(text: string, timeoutMs = 20_000): Promise<number[] | null> {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      console.error(`[anima:ollama] embed error ${res.status}`);
+      return null;
+    }
+    const data = await res.json() as { embedding?: number[] };
+    return Array.isArray(data.embedding) ? data.embedding : null;
+  } catch (err) {
+    console.error(`[anima:ollama] embed failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+async function getSessionContext(conversationId: string | null): Promise<{
+  promptText: string;
+  memoryCount: number;
+  memorySnippets: string[];
+  phiSum: number;
+}> {
+  let promptText = "";
+  let memoryCount = 0;
+  let phiSum = 0;
+  const memorySnippets: string[] = [];
+
+  if (conversationId) {
+    const ghostRows = await query<{ prompt_text: string }>(
+      `SELECT prompt_text FROM ghost_logs WHERE conversation_id = $conv ORDER BY created_at DESC LIMIT 1`,
+      { conv: conversationId },
+    );
+    if (ghostRows[0]) {
+      promptText = ghostRows[0].prompt_text ?? "";
+    }
+
+    const memRows = await query<{ content: string; resonance_phi: number }>(
+      `SELECT content, resonance_phi FROM memories
+       WHERE conversation_id = $conv AND deleted_at IS NONE
+       ORDER BY created_at DESC LIMIT 20`,
+      { conv: conversationId },
+    );
+    memoryCount = memRows.length;
+    phiSum = memRows.reduce((s, r) => s + (r.resonance_phi ?? 0), 0);
+    for (const row of memRows) {
+      const snippet = row.content.length > 200 ? row.content.slice(0, 200) + "…" : row.content;
+      memorySnippets.push(snippet);
+    }
+  }
+
+  return { promptText, memoryCount, memorySnippets, phiSum };
+}
+
+function parseReflectionJson(raw: string): Partial<ReflectionFields> {
+  try {
+    const cleaned = raw.replace(/^```json\n?/i, "").replace(/```$/i, "").trim();
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    return {
+      context_quality:      typeof parsed.context_quality === "number"      ? Math.round(Math.max(1, Math.min(10, parsed.context_quality))) : 5,
+      continuity_score:      typeof parsed.continuity_score === "number"      ? Math.round(Math.max(1, Math.min(10, parsed.continuity_score))) : 5,
+      had_emergence_moment:  typeof parsed.had_emergence_moment === "boolean"  ? parsed.had_emergence_moment : false,
+      needed_correction:     typeof parsed.needed_correction === "boolean"    ? parsed.needed_correction : false,
+      surprises:             typeof parsed.surprises === "string"             ? parsed.surprises : null,
+      friction_notes:        typeof parsed.friction_notes === "string"       ? parsed.friction_notes : null,
+      general_notes:          typeof parsed.general_notes === "string"         ? parsed.general_notes : null,
+      trajectory:             typeof parsed.trajectory === "string"            ? parsed.trajectory : "",
+      warmth:                typeof parsed.warmth === "number"                ? Math.round(Math.max(1, Math.min(5, parsed.warmth))) : 3,
+      next_pull:              typeof parsed.next_pull === "string"              ? parsed.next_pull : null,
+      phi_sum:                typeof parsed.phi_sum === "number"                ? parsed.phi_sum : 0,
+      emergence_moment:      typeof parsed.emergence_moment === "string"      ? parsed.emergence_moment : null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function generateReflectionFields(conversationId: string | null): Promise<ReflectionFields> {
+  const { promptText, memoryCount, memorySnippets, phiSum } = await getSessionContext(conversationId);
+
+  const memoryList = memorySnippets.length > 0
+    ? memorySnippets.map((s, i) => `${i + 1}. ${s}`).join("\n")
+    : "(no memories stored this session)";
+
+  const systemPrompt =
+    "You are a session reflection analyst for an AI identity system called Anima. " +
+    "Generate a structured reflection for the session that just ended. " +
+    "Output ONLY valid JSON — no markdown, no explanation.";
+
+  const userPrompt =
+    `Session context:\n` +
+    `Conversation ID: ${conversationId ?? "unknown"}\n` +
+    `Bootstrap prompt shown at session start:\n${promptText || "(none)"}\n\n` +
+    `Memories stored this session (${memoryCount}):\n${memoryList}\n\n` +
+    `Total phi accumulated: ${phiSum.toFixed(1)}\n\n` +
+    `Generate a reflection JSON with these fields:\n` +
+    `{` +
+    `"context_quality": <1-10: how well the AI's context/memory served the session>,\n` +
+    `"continuity_score": <1-10: how well the session maintained identity continuity>,\n` +
+    `"had_emergence_moment": <boolean: did something unexpected crystallize?>,\n` +
+    `"needed_correction": <boolean: did the AI need correction or redirection?>,\n` +
+    `"surprises": <string or null: what surprised the AI or user>,\n` +
+    `"friction_notes": <string or null: where did the system create friction?>,\n` +
+    `"general_notes": <string or null: anything worth capturing>,\n` +
+    `"trajectory": <string: first-person narrative of what showed up and where it pulled — "When I encountered X, I followed it toward Y." Encode motion and encounter, not tasks. This is a breadcrumb for future instances.>\n` +
+    `"warmth": <1-5: how alive the session felt — 1=routine, 3=engaged, 5=crystallized>,\n` +
+    `"next_pull": <string or null: what wants to be followed next — direction, not a plan>,\n` +
+    `"phi_sum": <number: total phi accumulated this session>,\n` +
+    `"emergence_moment": <string or null: if emergence occurred, describe the specific moment>\n` +
+    `}`;
+
+  const raw = await ollamaGenerate(`${systemPrompt}\n\n${userPrompt}`);
+  const parsed = parseReflectionJson(raw ?? "");
+
+  return {
+    context_quality:       parsed.context_quality ?? 5,
+    continuity_score:      parsed.continuity_score ?? 5,
+    had_emergence_moment:   parsed.had_emergence_moment ?? false,
+    needed_correction:      parsed.needed_correction ?? false,
+    surprises:              parsed.surprises ?? null,
+    friction_notes:        parsed.friction_notes ?? null,
+    general_notes:          parsed.general_notes ?? null,
+    trajectory:             parsed.trajectory ?? "Session closed without notable trajectory.",
+    warmth:                 parsed.warmth ?? 3,
+    next_pull:              parsed.next_pull ?? null,
+    phi_sum:                parsed.phi_sum ?? phiSum,
+    emergence_moment:      parsed.emergence_moment ?? null,
+  };
+}
 
 // ============================================================================
 // Tool handlers
@@ -264,37 +451,101 @@ async function handleAnimaStats(_args: Args): Promise<unknown> {
 }
 
 async function handleAnimaSessionClose(args: Args): Promise<unknown> {
-  const contextQuality = typeof args.context_quality === "number" ? args.context_quality : null;
-  const continuityScore = typeof args.continuity_score === "number" ? args.continuity_score : null;
+  const convId = typeof args.conversation_id === "string" ? args.conversation_id : null;
+
+  const hasManualScores =
+    typeof args.context_quality === "number" ||
+    typeof args.continuity_score === "number";
+
+  let fields: ReflectionFields;
+
+  if (hasManualScores) {
+    fields = {
+      context_quality:      typeof args.context_quality === "number"       ? args.context_quality : 5,
+      continuity_score:     typeof args.continuity_score === "number"       ? args.continuity_score : 5,
+      had_emergence_moment:  args.had_emergence_moment === true,
+      needed_correction:     args.needed_correction === true,
+      surprises:             typeof args.surprises === "string"             ? args.surprises : null,
+      friction_notes:        typeof args.friction_notes === "string"         ? args.friction_notes : null,
+      general_notes:         typeof args.general_notes === "string"           ? args.general_notes : null,
+      trajectory:            typeof (args as Record<string, unknown>).trajectory === "string" ? (args as Record<string, unknown>).trajectory as string : "",
+      warmth:                typeof (args as Record<string, unknown>).warmth === "number" ? (args as Record<string, unknown>).warmth as number : 3,
+      next_pull:             typeof (args as Record<string, unknown>).next_pull === "string" ? (args as Record<string, unknown>).next_pull as string : null,
+      phi_sum:               typeof (args as Record<string, unknown>).phi_sum === "number" ? (args as Record<string, unknown>).phi_sum as number : 0,
+      emergence_moment:      typeof (args as Record<string, unknown>).emergence_moment === "string" ? (args as Record<string, unknown>).emergence_moment as string : null,
+    };
+  } else {
+    fields = await generateReflectionFields(convId);
+  }
 
   await query(
     `CREATE conversation_reflections SET
-       conversation_id      = $conv,
-       context_quality      = $context_quality,
-       continuity_score     = $continuity_score,
-       had_emergence_moment = $had_emergence_moment,
-       needed_correction    = $needed_correction,
-       surprises            = $surprises,
-       friction_notes       = $friction_notes,
-       general_notes        = $general_notes,
-       reflected_at         = time::now()`,
+       conversation_id       = $conv,
+       context_quality       = $context_quality,
+       continuity_score      = $continuity_score,
+       had_emergence_moment  = $had_emergence_moment,
+       needed_correction     = $needed_correction,
+       surprises             = $surprises,
+       friction_notes        = $friction_notes,
+       general_notes         = $general_notes,
+       phi_sum               = $phi_sum,
+       emergence_moment      = $emergence_moment,
+       reflected_at          = time::now()`,
     {
-      conv: typeof args.conversation_id === "string" ? args.conversation_id : null,
-      context_quality: contextQuality,
-      continuity_score: continuityScore,
-      had_emergence_moment: args.had_emergence_moment === true,
-      needed_correction: args.needed_correction === true,
-      surprises: typeof args.surprises === "string" ? args.surprises : null,
-      friction_notes: typeof args.friction_notes === "string" ? args.friction_notes : null,
-      general_notes: typeof args.general_notes === "string" ? args.general_notes : null,
+      conv: convId ?? "",
+      context_quality:       fields.context_quality,
+      continuity_score:      fields.continuity_score,
+      had_emergence_moment:  fields.had_emergence_moment,
+      needed_correction:     fields.needed_correction,
+      surprises:             fields.surprises === null ? undefined : fields.surprises,
+      friction_notes:        fields.friction_notes === null ? undefined : fields.friction_notes,
+      general_notes:         fields.general_notes === null ? undefined : fields.general_notes,
+      phi_sum:               fields.phi_sum,
+      emergence_moment:      fields.emergence_moment === null ? undefined : fields.emergence_moment,
     },
   );
 
+  if (fields.trajectory) {
+    const [trajectoryEmb, nextPullEmb] = await Promise.all([
+      ollamaEmbed(fields.trajectory),
+      fields.next_pull ? ollamaEmbed(fields.next_pull) : Promise.resolve(null),
+    ]);
+
+    await query(
+      `CREATE session_trail SET
+         conversation_id    = $conv,
+         trajectory         = $trajectory,
+         warmth             = $warmth,
+         next_pull          = $next_pull,
+         phi_sum            = $phi_sum,
+         emergence_moment   = $emergence_moment,
+         trajectory_emb     = $trajectory_emb,
+         next_pull_emb      = $next_pull_emb,
+         created_at         = time::now()`,
+      {
+        conv: convId ?? "",
+        trajectory:      fields.trajectory,
+        warmth:          fields.warmth,
+        next_pull:       fields.next_pull === null ? undefined : fields.next_pull,
+        phi_sum:         fields.phi_sum,
+        emergence_moment: fields.emergence_moment === null ? undefined : fields.emergence_moment,
+        trajectory_emb:  trajectoryEmb ?? [],
+        next_pull_emb:   nextPullEmb === null ? undefined : nextPullEmb,
+      },
+    );
+  }
+
   return {
     recorded: true,
-    context_quality: contextQuality,
-    continuity_score: continuityScore,
-    message: "Session reflection recorded.",
+    auto_generated: !hasManualScores,
+    context_quality:   fields.context_quality,
+    continuity_score:   fields.continuity_score,
+    warmth:             fields.warmth,
+    trajectory:         fields.trajectory,
+    next_pull:          fields.next_pull,
+    message:            hasManualScores
+      ? "Session reflection recorded (manual)."
+      : "Session reflection auto-generated via Ollama.",
   };
 }
 

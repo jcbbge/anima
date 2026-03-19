@@ -111,18 +111,37 @@ DEFINE FIELD expires_at         ON ghost_logs TYPE datetime DEFAULT time::now() 
 -- =====================================================
 DEFINE TABLE conversation_reflections SCHEMAFULL;
 
-DEFINE FIELD conversation_id      ON conversation_reflections TYPE string;
-DEFINE FIELD context_quality      ON conversation_reflections TYPE option<int>
+DEFINE FIELD conversation_id       ON conversation_reflections TYPE string;
+DEFINE FIELD context_quality       ON conversation_reflections TYPE option<int>
   ASSERT $value IS NONE OR ($value >= 1 AND $value <= 10);
-DEFINE FIELD continuity_score     ON conversation_reflections TYPE option<int>
+DEFINE FIELD continuity_score      ON conversation_reflections TYPE option<int>
   ASSERT $value IS NONE OR ($value >= 1 AND $value <= 10);
 DEFINE FIELD had_emergence_moment ON conversation_reflections TYPE bool DEFAULT false;
-DEFINE FIELD needed_correction    ON conversation_reflections TYPE bool DEFAULT false;
-DEFINE FIELD surprises            ON conversation_reflections TYPE option<string>;
-DEFINE FIELD friction_notes       ON conversation_reflections TYPE option<string>;
-DEFINE FIELD general_notes        ON conversation_reflections TYPE option<string>;
-DEFINE FIELD reflected_at         ON conversation_reflections TYPE datetime DEFAULT time::now();
+DEFINE FIELD needed_correction     ON conversation_reflections TYPE bool DEFAULT false;
+DEFINE FIELD surprises             ON conversation_reflections TYPE option<string>;
+DEFINE FIELD friction_notes        ON conversation_reflections TYPE option<string>;
+DEFINE FIELD general_notes         ON conversation_reflections TYPE option<string>;
+DEFINE FIELD phi_sum               ON conversation_reflections TYPE option<float> DEFAULT 0;
+DEFINE FIELD emergence_moment      ON conversation_reflections TYPE option<string>;
+DEFINE FIELD reflected_at          ON conversation_reflections TYPE datetime DEFAULT time::now();
 
+
+-- =====================================================
+-- SESSION TRAIL: Navigation breadcrumbs (horizontal axis)
+-- Populated by session_close. Read by bootstrap to surface trajectory.
+-- =====================================================
+DEFINE TABLE session_trail SCHEMAFULL;
+DEFINE FIELD conversation_id    ON session_trail TYPE string;
+DEFINE FIELD trajectory         ON session_trail TYPE string;
+DEFINE FIELD warmth             ON session_trail TYPE float DEFAULT 3.0
+  ASSERT $value >= 1 AND $value <= 5;
+DEFINE FIELD next_pull          ON session_trail TYPE option<string>;
+DEFINE FIELD phi_sum            ON session_trail TYPE option<float> DEFAULT 0;
+DEFINE FIELD emergence_moment    ON session_trail TYPE option<string>;
+DEFINE FIELD trajectory_emb     ON session_trail TYPE array;
+DEFINE FIELD next_pull_emb      ON session_trail TYPE option<array>;
+DEFINE FIELD created_at         ON session_trail TYPE datetime DEFAULT time::now();
+DEFINE INDEX session_trail_conv ON session_trail FIELDS conversation_id;
 
 -- =====================================================
 -- MEMORY ASSOCIATIONS: Co-occurrence graph

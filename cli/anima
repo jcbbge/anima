@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+exec /opt/homebrew/bin/deno run \
+  --allow-net --allow-env --allow-read \
+  /Users/jcbbge/anima/cli/anima.ts "$@"

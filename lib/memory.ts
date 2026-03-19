@@ -523,7 +523,7 @@ export async function bootstrapMemories(): Promise<BootstrapResult> {
 export async function traversalBootstrap(): Promise<BootstrapResult> {
   // Config gate: only activates when fold_config.traversal_bootstrap = 'true'
   const configRows = await query<{ value: string }>(
-    `SELECT value FROM fold_config WHERE key = 'traversal_bootstrap' LIMIT 1`,
+    `SELECT \`value\` FROM fold_config WHERE key = 'traversal_bootstrap' LIMIT 1`,
     {},
   );
   const useTraversal = configRows[0]?.value === "true";
