@@ -4,30 +4,19 @@ Branch: main
 
 ## Completed
 
-- **Watchdog query fix** (`scripts/synthesis-daemon.ts:66`) — `value` was unquoted, SurrealDB 3 reserved word parse error, watchdog silently failed every 5 minutes. Added backticks. Verified query runs and daemon restarts clean.
-- **Zombie LIVE query cleared** — `pending_synthesis` stuck at `pending:28.8f` since 06:20 (daemon started before fix was committed, stale process). Reset to `idle`, restarted daemon. LIVE query now active.
-- **fold_config DB repaired** — 19 keys had `value = 'idle'` instead of real numbers. `parseInt('idle')` = NaN was breaking re-synthesis guard, cluster windows, tier thresholds. All 19 updated to correct defaults from schema.
-- **Schema seed fixed** (`schema/anima.surql:192`) — `fold_model` seeded as `claude-haiku-4-5-20251001` (invalid OpenRouter ID). Updated to `anthropic/claude-haiku-4.5`. Re-running schema no longer re-corrupts.
-- **maxTokens 200→400** (`lib/synthesize.ts:295`, `lib/llm.ts:129`) — synthesis content consumed the full 200 token budget, leaving nothing for ATTENTION_VECTOR block. `av_block_found: false` on every fold. Bumped to 400. Verified: `av_block_found: true`, `av_parse_ok: true`, `av_written: true`.
-- **Ollama URL** — audited as mismatch; actually correct. Ollama runs at `:8001`. Non-issue.
-- **Docs updated** — README: 7→8 tools, synthesis-worker→synthesis-daemon, stdio→HTTP. ANIMA.md: 5 tools stdio→8 tools HTTP port 3098. Specs: BUG-005 and BUG-001+006 marked done.
+- **BUG-002: Re-synthesis prevention** — code was already fully implemented from a prior session. Confirmed: `checkPhiPressure()` and `checkAndSynthesize()` both have `last_folded_at < $cutoff` recency filter; `synthesis-daemon.ts` has the same guard; secondary cosine dedup (`SEMANTIC_DEDUP_THRESHOLD = 0.92`) is live in `performFold()`. `recently_folded_window_minutes=30` in `fold_config`. Guard confirmed working — recent folds correctly excluded just-folded memories.
 
-## Verification (all passed)
-
-1. Daemon LIVE query fires on watermark change; watchdog catches stale; `pending→running→idle` lifecycle works
-2. `model: anthropic/claude-haiku-4.5` + `av_block_found: true` + `av_written: true` on consecutive folds
-3. Re-synthesis guard active — recently folded memories excluded within 30-min window
+- **BUG-004: memory_versions snapshot type mismatch** — live DB schema already has correct types (`fold_id: TYPE none | record<fold_log>`, `memory_id: TYPE none | record<memories>`). Validated by direct INSERT: both record ID fields accepted without coercion error. Old "Expected string" errors in log are historical, not current. `memory_versions` will populate naturally when the next active-tier memory reaches `synthesis_count >= 2` on promotion.
 
 ## Current State
 
-- 8 files modified, uncommitted
-- All three daemons running: MCP (PID 20346), synthesis-daemon (PID 19632), curiosity-worker (PID 43533)
-- `fold_config` DB clean — all values correct
-- `anthropic/claude-haiku-4.5` is the active fold model, attention vectors writing correctly
+- Clean — only `workspace/handoff-latest.md` modified (uncommitted)
+- Daemons: synthesis-daemon (PID 23089), curiosity-worker (PID 43533) — both running
+- Two successful folds ran this session — synthesis pipeline healthy
+- No snapshot errors in current synthesis logs
 
 ## Next Steps
 
-1. **Commit this session's changes** — 8 files ready to stage
-2. **BUG-002: active tier depletion** — spec `ready-to-implement`. Daemon reports "0 active memories" despite phi accumulation — tier query or threshold logic needs investigation.
-3. **traversal-bootstrap** — P1 spec. `traversal_bootstrap = 'false'` in fold_config. 1500ms deadline exceeded on bootstrap is recurring. When ready, flip flag and test three-stage reconstitution.
-4. **expressions-wiring** — P2 spec. `expressionsPending=0` in bootstrap, untouched.
+1. **traversal-bootstrap (P1)** — spec at `workspace/specs/traversal-bootstrap-latency.md`. `traversal_bootstrap = 'false'` in fold_config. Fix removes LLM from critical path (parallel DB queries + 1-hop association walk + Promise.race 1.5s deadline). Flip flag and test three-stage reconstitution once landed.
+2. **expressions-wiring (P2)** — spec at `workspace/specs/expressions-wiring.md`. `expressionsPending=0` in bootstrap, untouched.
+3. **schema additions (P1)** — `attention_vector`, `tension_fields`, `expressions`, `curiosity_threads` tables not yet in `schema/anima.surql`.
