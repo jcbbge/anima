@@ -19,7 +19,7 @@ memories accrete, synthesize, and promote through tiers based on significance an
 ## Architecture
 
 ```
-mcp-server/index.ts   — stdio MCP server (5 tools)
+mcp-server/index.ts   — HTTP MCP server (8 tools, port 3098)
 cli/anima.ts          — `anima` CLI binary
 lib/
   memory.ts           — addMemory, queryMemories, bootstrapMemories, getCatalysts

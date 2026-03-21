@@ -27,7 +27,7 @@ Anima is a memory substrate for AI assistants. It doesn't just store — it list
     ┌──────────────▼──────────────┐         │
     │       MCP Server            │         │
     │   mcp-server/index.ts       │         │
-    │   7 tools exposed           │         │
+    │   8 tools exposed           │         │
     └──────────────┬──────────────┘         │
                    │                        │
     ┌──────────────▼────────────────────────▼──────────────┐
@@ -43,9 +43,9 @@ Anima is a memory substrate for AI assistants. It doesn't just store — it list
     └──────────────┬──────────────┘
                    │ LIVE query
     ┌──────────────▼──────────────┐
-    │    Synthesis Worker         │
-    │  synthesis-worker/index.ts  │
-    │  Always listening (launchd) │
+    │    Synthesis Daemon         │
+    │  scripts/synthesis-daemon.ts│
+    │  LIVE query + watchdog      │
     └─────────────────────────────┘
 ```
 
@@ -152,7 +152,7 @@ If SurrealDB is down: `launchctl start dev.brain.surreal`
 ## Files
 
 ```
-mcp-server/index.ts               MCP server (stdio, JSON-RPC 2.0)
+mcp-server/index.ts               MCP server (HTTP, JSON-RPC 2.0, 8 tools)
 cli/anima.ts                      CLI entry point
 lib/
   memory.ts                       addMemory, queryMemories, bootstrap, getCatalysts, getStats, associateMemories
@@ -160,9 +160,9 @@ lib/
   db.ts                           SurrealDB singleton + query()
   embed.ts                        Ollama embedding
   hash.ts                         SHA-256 content hash (dedup)
-synthesis-worker/
-  index.ts                        Persistent LIVE query worker
-  anima.synthesis.plist           launchd service definition
+scripts/
+  synthesis-daemon.ts             LIVE query daemon + watchdog (replaces synthesis-worker)
+  curiosity-worker.ts             Curiosity thread processor
 schema/anima.surql                SurrealDB schema
 scripts/seed_genesis.ts           14 genesis memory seeds
 hooks/capture-interaction.sh      UserPromptSubmit hook (passive capture)

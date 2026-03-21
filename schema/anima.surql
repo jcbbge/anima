@@ -189,7 +189,7 @@ INSERT INTO fold_config [
   { key: 'search_phi_weight',       value: '0.3',                       description: 'phi weight in hybrid search score' },
   { key: 'search_cosine_weight',    value: '0.7',                       description: 'Cosine weight in hybrid search score' },
   { key: 'search_confidence_weight',value: '0.1',                       description: 'confidence weight in hybrid search score' },
-  { key: 'fold_model',              value: 'claude-haiku-4-5-20251001', description: 'LLM model for synthesis calls' },
+  { key: 'fold_model',              value: 'anthropic/claude-haiku-4.5', description: 'LLM model for synthesis calls (OpenRouter format: vendor/model)' },
   { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
   { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
   { key: 'traversal_bootstrap',            value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },

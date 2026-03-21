@@ -2,7 +2,7 @@
 spec: BUG-005
 title: fold_model DB Config Ignored — Wrong Model Used for Synthesis
 priority: MEDIUM
-status: ready-to-implement
+status: done
 created: 2026-03-21
 ---
 

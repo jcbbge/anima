@@ -292,7 +292,7 @@ async function callLLM(memories: Partial<Memory>[], mode: "analysis" | "recognit
     // DB read failed — fall through to profile system
   }
   if (model) {
-    const content = await callLLMRaw(messages, { config: { model, temperature: 0.7, maxTokens: 200 }, timeoutMs: LLM_TIMEOUT_MS });
+    const content = await callLLMRaw(messages, { config: { model, temperature: 0.7, maxTokens: 400 }, timeoutMs: LLM_TIMEOUT_MS });
     return { content, model };
   }
   return callSynthesisLLM(messages, LLM_TIMEOUT_MS);

@@ -2,7 +2,7 @@
 spec: BUG-001 + BUG-006
 title: Synthesis Daemon — Zombie LIVE Query + Dual Worker Conflict
 priority: CRITICAL
-status: ready-to-implement
+status: done
 created: 2026-03-21
 ---
 

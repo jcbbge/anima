@@ -63,7 +63,7 @@ function startWatchdog(): void {
   setInterval(async () => {
     try {
       const rows = await query<{ value: string; updated_at: string }>(
-        `SELECT value, updated_at FROM fold_config WHERE key = 'pending_synthesis' LIMIT 1`,
+        `SELECT \`value\`, updated_at FROM fold_config WHERE key = 'pending_synthesis' LIMIT 1`,
         {},
       );
       const row = rows[0];

@@ -126,7 +126,7 @@ function resolveSynthesisProfileConfig(): ResolvedProfileConfig {
     profile,
     primaryModel: profile.primary,
     temperature: 0.7,
-    maxTokens: 200,
+    maxTokens: 400,
   };
 }
 
