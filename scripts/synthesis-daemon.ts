@@ -124,13 +124,20 @@ async function dispatchFold(): Promise<void> {
     );
     const windowMs = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
     const recentCutoff = new Date(Date.now() - windowMs).toISOString();
+    const maxRow = await query<{ value: string }>(
+      "SELECT `value` FROM fold_config WHERE key = 'fold_max_memories' LIMIT 1",
+      {},
+    );
+    const maxMemories = parseInt(maxRow[0]?.value ?? "5", 10);
+
     const memories = await query<Memory>(
       `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
        FROM memories
        WHERE tier = 'active' AND deleted_at IS NONE
        AND (last_folded_at IS NONE OR last_folded_at < <datetime>$cutoff)
-       ORDER BY resonance_phi DESC`,
-      { cutoff: recentCutoff }
+       ORDER BY resonance_phi DESC
+       LIMIT $maxMemories`,
+      { cutoff: recentCutoff, maxMemories }
     );
 
     if (memories.length >= 3) {

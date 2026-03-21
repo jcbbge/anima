@@ -196,7 +196,8 @@ INSERT INTO fold_config [
   { key: 'pending_synthesis',              value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
   { key: 'recently_folded_window_minutes', value: '30',                        description: 'Minutes after a fold fires before the same memories are eligible for re-synthesis. Guards against re-synthesis loops.' },
   { key: 'expression_readiness_threshold', value: '3.0',                       description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
-  { key: 'curiosity_hunger_threshold',     value: '3.5',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
+  { key: 'curiosity_hunger_threshold',     value: '3.5',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' },
+  { key: 'fold_max_memories',             value: '5',                         description: 'Maximum memories consumed per fold cycle. Prevents active tier depletion.' }
 ];
 
 
@@ -400,7 +401,7 @@ DEFINE EVENT IF NOT EXISTS phi_watermark ON TABLE memories
 -- EVENT: tier_promote — DB-layer tier promotion
 -- Mirrors the promotion logic in performFold() so any
 -- synthesis_count increment triggers promotion automatically.
--- active → stable: synthesis_count >= 2
+-- active → stable: synthesis_count >= 3
 -- stable → thread:  synthesis_count >= 5 OR resonance_phi >= 4.0
 -- =====================================================
 
@@ -410,7 +411,7 @@ DEFINE EVENT IF NOT EXISTS tier_promote ON TABLE memories
     AND $after.synthesis_count != $before.synthesis_count
     AND $after.deleted_at IS NONE
   THEN {
-    IF $after.tier = 'active' AND $after.synthesis_count >= 2 {
+    IF $after.tier = 'active' AND $after.synthesis_count >= 3 {
       UPDATE memories SET
         tier = 'stable',
         tier_updated = time::now(),
