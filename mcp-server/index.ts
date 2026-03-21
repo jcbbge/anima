@@ -710,7 +710,14 @@ async function dispatch(msg: Record<string, unknown>): Promise<unknown> {
   }
 
   if (method === "tools/call") {
-    const toolName = (params as Record<string, unknown>)?.name as string;
+    let toolName = (params as Record<string, unknown>)?.name as string;
+    // Strip any harness-injected prefix (e.g. OpenCode prepends "{configKey}_" to all tool names).
+    // Search from position 1 so we skip the leading "anima_" in bare names like "anima_stats"
+    // but still catch "anima-mcp_anima_stats" (idx=10) and "anima_anima_stats" (idx=6).
+    if (toolName) {
+      const idx = toolName.indexOf("anima_", 1);
+      if (idx > 0) toolName = toolName.slice(idx);
+    }
     const toolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Args;
 
     try {
