@@ -52,6 +52,37 @@ async function loadEnv(): Promise<void> {
 const log = (msg: string) => console.error(`[anima:synthesis-daemon] ${msg}`);
 
 // ============================================================================
+// Watchdog — catches pending watermarks missed by zombie LIVE queries
+// Fires every 5 minutes. If watermark has been pending for >2 minutes, dispatch.
+// ============================================================================
+
+const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const WATCHDOG_STALE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+
+function startWatchdog(): void {
+  setInterval(async () => {
+    try {
+      const rows = await query<{ value: string; updated_at: string }>(
+        `SELECT value, updated_at FROM fold_config WHERE key = 'pending_synthesis' LIMIT 1`,
+        {},
+      );
+      const row = rows[0];
+      if (!row?.value?.startsWith("pending:")) return;
+
+      const staleness = Date.now() - new Date(row.updated_at).getTime();
+      if (staleness < WATCHDOG_STALE_THRESHOLD_MS) return;
+
+      log(`Watchdog: pending watermark '${row.value}' stale for ${Math.round(staleness / 1000)}s — dispatching fold`);
+      dispatchFold().catch((err) =>
+        log(`Watchdog fold error: ${(err as Error).message}`)
+      );
+    } catch (err) {
+      log(`Watchdog check failed: ${(err as Error).message}`);
+    }
+  }, WATCHDOG_INTERVAL_MS);
+}
+
+// ============================================================================
 // Mutex guard — one fold at a time
 // ============================================================================
 
@@ -64,15 +95,11 @@ let synthesisRunning = false;
 // ============================================================================
 
 async function setWatermark(value: string): Promise<void> {
-  try {
-    await query(
-      `UPDATE fold_config SET value = $value, updated_at = time::now()
-       WHERE key = 'pending_synthesis'`,
-      { value },
-    );
-  } catch (err) {
-    log(`Failed to set watermark to '${value}': ${(err as Error).message}`);
-  }
+  await query(
+    `UPDATE fold_config SET value = $value, updated_at = time::now()
+     WHERE key = 'pending_synthesis'`,
+    { value },
+  );
 }
 
 // ============================================================================
@@ -126,6 +153,12 @@ async function dispatchFold(): Promise<void> {
     }, 30_000);
   } finally {
     synthesisRunning = false;
+    try {
+      await setWatermark("idle");
+      log("Watermark reset to 'idle'");
+    } catch (err) {
+      log(`WARN: Failed to reset watermark to idle — watchdog will recover: ${(err as Error).message}`);
+    }
   }
 }
 
@@ -246,6 +279,9 @@ await getDb();
 
 // Handle any watermark that was pending before this process started
 await checkStartupWatermark();
+
+// Watchdog catches any pending watermarks the LIVE query missed
+startWatchdog();
 
 // Persistent LIVE loop with exponential backoff on failure
 const RETRY_BASE_MS = 5_000;

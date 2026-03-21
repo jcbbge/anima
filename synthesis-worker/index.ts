@@ -1,4 +1,16 @@
 /**
+ * DEPRECATED: This worker has been superseded by scripts/synthesis-daemon.ts
+ * which uses a decoupled watermark architecture.
+ *
+ * The launchd service (anima.synthesis) is DISABLED but not removed.
+ * Semantic conflict and cluster emergence triggers (handled here) need to be
+ * ported to synthesis-daemon.ts before this file can be fully removed.
+ *
+ * DO NOT re-enable without first resolving the dual-worker transaction conflict.
+ * See: workspace/specs/bug-synthesis-daemon-zombie-and-dual-workers.md
+ */
+
+/**
  * synthesis-worker/index.ts
  * Anima v2 — The Persistent Synthesis Worker.
  *
