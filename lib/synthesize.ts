@@ -26,7 +26,7 @@
 import { query } from "./db.ts";
 import { generateEmbedding } from "./embed.ts";
 import { generateHash } from "./hash.ts";
-import { callSynthesisLLM } from "./llm.ts";
+import { callSynthesisLLM, callLLMRaw } from "./llm.ts";
 import type { AttentionVector, Memory } from "./memory.ts";
 import { associateMemories } from "./memory.ts";
 
@@ -280,6 +280,21 @@ export function buildSynthesisMessages(memories: Partial<Memory>[], mode: "analy
 
 async function callLLM(memories: Partial<Memory>[], mode: "analysis" | "recognition" | "deepening"): Promise<{ content: string | null; model: string }> {
   const messages = buildSynthesisMessages(memories, mode);
+  let model: string | undefined;
+  try {
+    const rows = await query<{ value: string }>(
+      "SELECT `value` FROM fold_config WHERE key = 'fold_model' LIMIT 1",
+    );
+    if (rows[0]?.value) {
+      model = rows[0].value;
+    }
+  } catch {
+    // DB read failed — fall through to profile system
+  }
+  if (model) {
+    const content = await callLLMRaw(messages, { config: { model, temperature: 0.7, maxTokens: 200 }, timeoutMs: LLM_TIMEOUT_MS });
+    return { content, model };
+  }
   return callSynthesisLLM(messages, LLM_TIMEOUT_MS);
 }
 
