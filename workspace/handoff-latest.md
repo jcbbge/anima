@@ -1,33 +1,48 @@
 # Session Handoff
-Date: 2026-03-19
+Date: 2026-03-21
 Branch: main
 
-## Completed
+## Previous Session (2026-03-20)
 
-- **Subagent MCP dynamic agent system built** — `~/dev-backbone/subagent-mcp/` overhauled with 5 new tools:
-  - `subagents_create` — creates named long-lived sessions with model + system prompt
-  - `subagents_delegate` — sends messages, auto-continues existing sessions
-  - `subagents_sessions/info/destroy` — session lifecycle management
-  - `subagents_models` — lists OpenRouter models from API (14 available, categorized)
-  - `openrouter-models.ts` — fetches from openrouter API, filters by opencode whitelist, caches 5min
-  - `executor-gateway.ts` — lightweight HTTP proxy on port 3095 that handles MCP handshake (session persistence) for the executor at 8000
-- **Key discovery**: opencode SDK's `session.prompt()` is synchronous — waits for full response. No SSE events needed. `session.status()` exists but returns empty map for API-created sessions. `session.prompt()` response contains full text parts directly.
-- **Skill trigger bug fixed**: mentioning `skill` (or any skill name) in subagent system prompts causes opencode to evaluate ALL skill permission patterns on every call → timeouts. System prompt must list only raw tool names.
-- **Confirmed subagent can reach all 3 MCP servers via bash HTTP**:
-  - dev-brain 3097, anima 3098, kotadb 3099 (all via curl JSON-RPC)
-  - executor 8000 requires session persistence — gateway at 3095 handles this
-- **Minor**: `lib/memory.ts` catalystCount GROUP ALL fix
+- **Fixed MCP tool name collision — robustly** — `indexOf("anima_", 1)` prefix stripping.
+  Committed `c908030`.
+- All three prefix cases verified: bare, `anima-mcp_`, `anima_` double-prefix.
 
-## Current State
+## This Session (2026-03-21)
 
-- 2 files modified (uncommitted): `lib/memory.ts`, `workspace/handoff-latest.md`
-- `gemini-reasoner` subagent is live with session `ses_2fbb8bebcffeB1ya16EM13pqCg` (3 messages)
-- Executor gateway running on port 3095 (bun process)
+- **BUG-003 FIXED** — workspace gitignore resolved: `.gitignore` now tracks `workspace/specs/` and `workspace/handoff-latest.md` via negation patterns. 10 spec files + handoff now stageable.
+- **BUG-007 VERIFIED** — curiosity worker `>` → `>=` fix already applied in prior session (scripts/curiosity-worker.ts). Schema threshold also updated to 3.5.
+- **BUG-001/006 FIXED (prior session)** — synthesis daemon zombie resolved
+
+## Wave 1 Status
+
+| Bug | Status |
+|-----|--------|
+| BUG-001/006 | ✅ Fixed (prior) |
+| BUG-007 | ✅ Fixed (prior) |
+| BUG-003 | ✅ Fixed (this session) |
+| BUG-002 | ⏳ Pending — active tier depletion
+
+## Bugs Found and Specced
+
+| Priority | File | One-liner | Status |
+|----------|------|-----------|--------|
+| CRITICAL | `bug-synthesis-daemon-zombie-and-dual-workers.md` | Daemon LIVE query silently died | ✅ Fixed (prior) |
+| HIGH | `bug-curiosity-worker-hunger-threshold.md` | `>` should be `>=` | ✅ Fixed (prior) |
+| HIGH | `bug-active-tier-depletion.md` | Synthesis drains all active memories | ⏳ Pending |
+| MEDIUM | `bug-handoff-gitignore.md` | `workspace/` gitignored | ✅ Fixed (this) |
+| MEDIUM | `bug-fold-model-config.md` | `fold_model` DB config never read | ⏳ Pending |
+| LOW-MED | `bug-memory-versions-snapshot.md` | Snapshot fails silently | ⏳ Pending |
 
 ## Next Steps
 
-1. Commit `lib/memory.ts` + handoff update
-2. Deploy executor-gateway as launchd daemon (or integrate into subagent-mcp startup)
-3. Test `gemini-reasoner` with a real task to verify multi-turn memory works
-4. Consider: the `@gemini` shorthand routing — main thread would need a skill/hook to intercept `@name` mentions and route to `subagents_delegate(agent="name", input="...")`
-5. Consider: periodic session compaction to prevent context window overflow (check `session.compact` API)
+1. Verify synthesis fires on next memory store (check `/tmp/synthesis-daemon.error.log`)
+2. Fix BUG-002 — active tier depletion (add LIMIT 5 to fold query + update schema)
+3. Fix BUG-004 — fold model config (read fold_model from DB)
+4. Fix BUG-005 — memory versions snapshot
+
+## Key State Notes
+
+- `fold_config.pending_synthesis` = `idle`
+- Old worker disabled at launchd level: `gui/501/anima.synthesis` — **do NOT re-enable**
+- Daemon running: PID 7214 — restart with `launchctl kickstart -k gui/501/dev.anima.synthesis-daemon`
