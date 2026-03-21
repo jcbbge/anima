@@ -180,11 +180,11 @@ async function runCycle(): Promise<void> {
       "SELECT `value` FROM fold_config WHERE key = 'curiosity_hunger_threshold' LIMIT 1",
       {},
     );
-    const hungerThreshold = parseFloat(thresholdRow[0]?.value ?? "5.0");
+       const hungerThreshold = parseFloat(thresholdRow[0]?.value ?? "3.5");
 
     const threads = await query<CuriosityThread>(
       `SELECT * FROM curiosity_threads
-       WHERE state = 'hungry' AND hunger_score > $threshold
+       WHERE state = 'hungry' AND hunger_score >= $threshold
        ORDER BY hunger_score DESC
        LIMIT 3`,
       { threshold: hungerThreshold },

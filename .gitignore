@@ -40,8 +40,12 @@ models/
 *_SUMMARY.md
 
 # Development workspace (local only - never commit)
-/workspace/
-workspace/
+# Track specs/ and handoff files (negation must come AFTER the rule it negates)
+!/workspace/
+!workspace/
+
+!workspace/specs/
+!workspace/handoff-latest.md
 
 # Database files (local development)
 database/anima.db

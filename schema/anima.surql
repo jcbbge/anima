@@ -196,7 +196,7 @@ INSERT INTO fold_config [
   { key: 'pending_synthesis',              value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
   { key: 'recently_folded_window_minutes', value: '30',                        description: 'Minutes after a fold fires before the same memories are eligible for re-synthesis. Guards against re-synthesis loops.' },
   { key: 'expression_readiness_threshold', value: '3.0',                       description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
-  { key: 'curiosity_hunger_threshold',     value: '5.0',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
+  { key: 'curiosity_hunger_threshold',     value: '3.5',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
 ];
 
 
