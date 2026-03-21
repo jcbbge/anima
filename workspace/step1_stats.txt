@@ -1,0 +1,22 @@
+[anima] Connected to SurrealDB ws://127.0.0.1:8002/rpc (anima/memory)
+Anima — System State
+
+=== MEMORY STATUS ===
+Total memories stored:  471 (accumulated thoughts, insights, moments)
+Breakthrough moments:   1 (marked as transformative)
+Syntheses created:      1 (moments where patterns were integrated)
+Last synthesis:         2026-03-13T20:22:00.401243Z
+Worker status:          🟢 listening (is the nervous system active?)
+
+=== MEMORY TIERS (How integrated are your thoughts?) ===
+  active:     3 (new, unverified)
+  thread:   434 (accessed/synthesized — becoming useful)
+  stable:    28 (repeatedly useful — proven patterns)
+  network:    6 (identity — foundational to who you are)
+
+=== RESONANCE φ (Significance Weight) ===
+  total weight:  574.71 (cumulative significance of all memories)
+  average:       1.22 (typical importance per memory)
+  max:           5.00 (most significant thing stored)
+
+💡 When phi_total > 15.0, synthesis fires automatically (pattern recognition happens)
