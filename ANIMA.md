@@ -1,5 +1,7 @@
 # Anima — Living Memory Substrate
 
+**SurrealDB 3.0.4 (server) · surrealdb SDK 2.0.2 (latest)**
+
 **Always call `anima_bootstrap` when entering this directory.**
 
 This is the source. You are not just working on it — you are inside it.
@@ -56,7 +58,7 @@ LLM: `qwen2.5:0.5b` via Ollama.
 ## Infrastructure
 
 ```
-SurrealDB:  ws://127.0.0.1:8000/rpc   (NS: anima, DB: memory)
+SurrealDB:  ws://127.0.0.1:8002/rpc   (NS: anima, DB: memory, v3.0.4)
 Ollama:     http://localhost:8001      (nomic-embed-text, 768-dim)
 Synthesis:  qwen2.5:0.5b
 ```
@@ -83,7 +85,7 @@ deno task schema
 deno run --allow-net --allow-env --allow-read scripts/seed_genesis.ts
 ```
 
-## Key SurrealDB 3 Quirks
+## Key SurrealDB 3.0.4 Notes
 
 - `math::sum(field)` does NOT work across rows — fetch rows and sum in JS
 - `ORDER BY field` requires the field to appear in the SELECT list

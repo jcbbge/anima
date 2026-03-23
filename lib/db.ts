@@ -28,12 +28,37 @@ function isConnectionError(err: unknown): boolean {
 
 let db: Surreal | null = null;
 let connectingPromise: Promise<Surreal> | null = null;
+let heartbeatIntervalId: number | null = null;
+
+function stopHeartbeat(): void {
+  if (heartbeatIntervalId !== null) {
+    clearInterval(heartbeatIntervalId);
+    heartbeatIntervalId = null;
+  }
+}
+
+function startHeartbeat(client: Surreal): void {
+  stopHeartbeat();
+  const heartbeatMs = Number(Deno.env.get("SURREAL_HEARTBEAT_MS") ?? "30000");
+  if (!Number.isFinite(heartbeatMs) || heartbeatMs <= 0) return;
+
+  heartbeatIntervalId = setInterval(async () => {
+    // Keep websocket warm; if heartbeat fails, force reconnect path on next query.
+    try {
+      await client.query("RETURN true;");
+    } catch {
+      stopHeartbeat();
+      db = null;
+      connectingPromise = null;
+    }
+  }, heartbeatMs);
+}
 
 function resetDb(): void {
+  stopHeartbeat();
   db = null;
   connectingPromise = null;
 }
-
 export async function getDb(): Promise<Surreal> {
   if (db) return db;
   if (connectingPromise) return await connectingPromise;
@@ -46,6 +71,7 @@ export async function getDb(): Promise<Surreal> {
       await client.use({ namespace: SURREAL_NS, database: SURREAL_DB });
       console.error(`[anima] Connected to SurrealDB ${SURREAL_URL} (${SURREAL_NS}/${SURREAL_DB})`);
       db = client;
+      startHeartbeat(client);
       connectingPromise = null;
       return db;
     } catch (err) {

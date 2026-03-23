@@ -1,13 +1,12 @@
 {
   "imports": {
-    "surrealdb": "npm:surrealdb@2.0.2"
+    "surrealdb": "npm:surrealdb@2.0.2",
+    "@surrealdb/wasm": "npm:@surrealdb/wasm@^3.0.3",
+    "@surrealdb/node": "npm:@surrealdb/node@^3.0.3"
   },
   "tasks": {
     "mcp": "deno run --allow-net --allow-env --allow-read mcp-server/index.ts",
     "cli": "deno run --allow-net --allow-env --allow-read --allow-run cli/anima.ts",
-    "worker": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts",
-    "worker:once": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --once",
-    "worker:dry-run": "deno run --allow-net --allow-env --allow-read synthesis-worker/index.ts --dry-run",
     "schema": "surreal import --endpoint http://127.0.0.1:8002 --username root --password root --namespace anima --database memory schema/anima.surql",
     "report": "deno run --allow-net --allow-env --allow-read --allow-write scripts/daily_report.ts"
   }

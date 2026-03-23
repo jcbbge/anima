@@ -115,6 +115,8 @@
   },
   "workspace": {
     "dependencies": [
+      "npm:@surrealdb/node@^3.0.3",
+      "npm:@surrealdb/wasm@^3.0.3",
       "npm:surrealdb@2.0.2"
     ]
   }

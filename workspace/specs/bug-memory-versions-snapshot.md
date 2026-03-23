@@ -161,7 +161,7 @@ and string references (like `"fold_log:abc123"`) are human-readable.
 
 ### Approach C: Fix code to pass RecordId objects (most correct, most complex)
 
-Import SurrealDB's `RecordId` class in `lib/synthesize.ts` and construct proper RecordId
+Import SurrealDB's `RecordId` class from `surrealdb@2.0.2` in `lib/synthesize.ts` and construct proper RecordId
 objects before passing to the CREATE query.
 
 In `lib/synthesize.ts`, at the snapshot CREATE (line ~583):
@@ -205,7 +205,7 @@ in use handles RecordId objects.
 
 **If Approach C:**
 - `/Users/jcbbge/anima/lib/synthesize.ts` — lines ~554-604, snapshot CREATE section
-- Import `RecordId` from surrealdb
+- Import `RecordId` from `surrealdb@2.0.2`
 
 ---
 

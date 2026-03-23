@@ -1,7 +1,7 @@
 -- =====================================================
 -- Anima v2 Schema
 -- NS: anima / DB: memory
--- SurrealDB 3.0
+-- SurrealDB 3.0.4 (latest)
 --
 -- Changelog:
 --   2026-03-15  Layer 2 (origin attribution) + v2 extensions:
@@ -82,7 +82,10 @@ DEFINE FIELD synthesis_mode    ON fold_log TYPE string
 DEFINE FIELD synthesis_model   ON fold_log TYPE option<string>;
 DEFINE FIELD conversation_id   ON fold_log TYPE option<string>;
 DEFINE FIELD input_memory_ids  ON fold_log TYPE array;
+DEFINE FIELD memory_count      ON fold_log TYPE int;
 DEFINE FIELD output_memory_id  ON fold_log TYPE option<record<memories>>;
+DEFINE FIELD output_tier       ON fold_log TYPE option<string>
+  ASSERT $value INSIDE ['active', 'thread', 'stable', 'network'];
 DEFINE FIELD synthesis_content ON fold_log TYPE string;
 DEFINE FIELD phi_before        ON fold_log TYPE float;
 DEFINE FIELD phi_after         ON fold_log TYPE float;
@@ -146,6 +149,7 @@ DEFINE INDEX session_trail_conv ON session_trail FIELDS conversation_id;
 
 -- =====================================================
 -- MEMORY ASSOCIATIONS: Co-occurrence graph
+-- DEPRECATED: memory_associations to be removed after remembers migration is validated
 -- =====================================================
 DEFINE TABLE memory_associations SCHEMAFULL;
 
@@ -164,6 +168,16 @@ DEFINE INDEX assoc_pair ON memory_associations FIELDS memory_a, memory_b UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_assoc_a_resonance ON memory_associations FIELDS memory_a, strength;
 DEFINE INDEX IF NOT EXISTS idx_assoc_b_resonance ON memory_associations FIELDS memory_b, strength;
 
+-- =====================================================
+-- REMEMBERS: Memory relation edges (A remembers B)
+-- =====================================================
+DEFINE TABLE remembers SCHEMAFULL TYPE RELATION IN memories OUT memories;
+DEFINE FIELD strength ON remembers TYPE float DEFAULT 1.0;
+DEFINE FIELD co_occurrence ON remembers TYPE int DEFAULT 1;
+DEFINE FIELD created_at ON remembers TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated_at ON remembers TYPE datetime DEFAULT time::now();
+DEFINE INDEX remembers_unique ON remembers FIELDS in, out UNIQUE;
+DEFINE INDEX remembers_strength ON remembers FIELDS strength;
 
 -- =====================================================
 -- FOLD_CONFIG: System parameters (renamed to avoid 'config' reserved keyword)
@@ -176,28 +190,26 @@ DEFINE FIELD updated_at  ON fold_config TYPE datetime DEFAULT time::now();
 DEFINE INDEX fold_config_key  ON fold_config FIELDS key UNIQUE;
 
 INSERT INTO fold_config [
-  { key: 'phi_threshold',           value: '15.0',                      description: 'Total active-tier phi that triggers autonomous synthesis' },
-  { key: 'conflict_similarity',     value: '0.85',                      description: 'Cosine similarity above which memories are considered conflicting' },
-  { key: 'cluster_size',            value: '3',                         description: 'Memories in semantic cluster within 1h that triggers synthesis' },
-  { key: 'cluster_window_hours',    value: '1',                         description: 'Time window for cluster detection' },
-  { key: 'phi_default',             value: '1.0',                       description: 'Default phi for new memories' },
-  { key: 'phi_catalyst_boost',      value: '1.0',                       description: 'phi increment on catalyst mark' },
-  { key: 'phi_fold_boost',          value: '0.5',                       description: 'phi boost applied to fold synthesis outputs' },
-  { key: 'phi_network_threshold',   value: '4.0',                       description: 'Synthesis output phi >= this auto-promotes to network tier' },
-  { key: 'tier_thread_threshold',   value: '3',                         description: 'access_count to promote active to thread' },
-  { key: 'tier_stable_threshold',   value: '10',                        description: 'access_count to promote thread to stable' },
-  { key: 'search_phi_weight',       value: '0.3',                       description: 'phi weight in hybrid search score' },
-  { key: 'search_cosine_weight',    value: '0.7',                       description: 'Cosine weight in hybrid search score' },
-  { key: 'search_confidence_weight',value: '0.1',                       description: 'confidence weight in hybrid search score' },
-  { key: 'fold_model',              value: 'anthropic/claude-haiku-4.5', description: 'LLM model for synthesis calls (OpenRouter format: vendor/model)' },
-  { key: 'fold_min_memories',       value: '3',                         description: 'Minimum memories to trigger a fold' },
-  { key: 'synthesis_backpressure',  value: '5',                         description: 'Max concurrent synthesis calls before queuing' },
-  { key: 'traversal_bootstrap',            value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
-  { key: 'pending_synthesis',              value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
-  { key: 'recently_folded_window_minutes', value: '30',                        description: 'Minutes after a fold fires before the same memories are eligible for re-synthesis. Guards against re-synthesis loops.' },
-  { key: 'expression_readiness_threshold', value: '3.0',                       description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
-  { key: 'curiosity_hunger_threshold',     value: '3.5',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' },
-  { key: 'fold_max_memories',             value: '5',                         description: 'Maximum memories consumed per fold cycle. Prevents active tier depletion.' }
+  { key: 'phi_threshold',                value: '15.0',                      description: 'Total active-tier phi that triggers autonomous synthesis' },
+  { key: 'conflict_similarity',          value: '0.85',                      description: 'Cosine similarity above which memories are considered conflicting' },
+  { key: 'cluster_size',                 value: '3',                         description: 'Memories in semantic cluster within configured window that trigger synthesis' },
+  { key: 'cluster_window_hours',         value: '1',                         description: 'Time window (hours) for cluster detection' },
+  { key: 'cluster_similarity',           value: '0.75',                      description: 'Cosine similarity threshold for memories to count toward cluster pressure' },
+  { key: 'phi_fold_boost',               value: '0.5',                       description: 'phi boost applied to fold synthesis outputs' },
+  { key: 'phi_network_threshold',        value: '4.0',                       description: 'Synthesis output phi >= this auto-promotes to network tier' },
+  { key: 'semantic_dedup_threshold',     value: '0.92',                      description: 'Suppress synthesis output if semantically too similar to recent syntheses' },
+  { key: 'deepening_thread_access_min',  value: '3',                         description: 'Min thread access_count to qualify as deepening anchor' },
+  { key: 'deepening_association_threshold', value: '0.3',                    description: 'Min cosine similarity for active memories to count as deepening signal' },
+  { key: 'fold_model',                   value: 'meta-llama/llama-3.1-8b-instruct', description: 'LLM model for synthesis calls (OpenRouter format: vendor/model)' },
+  { key: 'fold_min_memories',            value: '3',                         description: 'Minimum memories to trigger a fold' },
+  { key: 'fold_max_memories',            value: '5',                         description: 'Maximum memories consumed per fold cycle. Prevents active tier depletion.' },
+  { key: 'synthesis_backpressure',       value: '5',                         description: 'Max concurrent synthesis checks before dropping additional checks' },
+  { key: 'traversal_bootstrap',          value: 'false',                     description: 'Enable three-stage layered reconstitution bootstrap (true/false). Default false falls back to bootstrapMemories().' },
+  { key: 'pending_synthesis',            value: 'idle',                      description: 'Watermark for phi-threshold synthesis daemon: idle | pending:<phi_total>' },
+  { key: 'recently_folded_window_minutes', value: '30',                      description: 'Minutes after a fold fires before the same memories are eligible for re-synthesis. Guards against re-synthesis loops.' },
+  { key: 'reflect_watermark_hours',      value: '24',                        description: 'Hours before a memory is considered eligible again for reflectAndSynthesize.' },
+  { key: 'expression_readiness_threshold', value: '3.0',                     description: 'Minimum readiness_phi for a synthesis output to generate an expression record.' },
+  { key: 'curiosity_hunger_threshold',   value: '3.5',                       description: 'hunger_score above which a curiosity thread triggers the curiosity worker.' }
 ];
 
 
@@ -337,10 +349,10 @@ DEFINE FIELD IF NOT EXISTS synthesis_count ON memories TYPE int DEFAULT 0;
 -- associations   — records where this memory is memory_a (primary node)
 -- associations_as_b — records where this memory is memory_b (secondary node)
 --
--- NOTE: SurrealDB 3.0 REFERENCE back-reference COMPUTED syntax is not yet
--- confirmed stable. These are declared as plain writable fields (DEFAULT [])
+-- NOTE: SurrealDB 3.0.4 — Record References are experimental (stable release pending). Using app-layer fill.
+-- These are declared as plain writable fields (DEFAULT [])
 -- and populated by the application layer (associateMemories / queryMemories).
--- When SurrealDB COMPUTED <~ syntax is confirmed, replace with:
+-- When SurrealDB Record References reach stable, replace with native back-reference syntax.
 --   COMPUTED <~(memory_associations FIELD memory_a)
 --   COMPUTED <~(memory_associations FIELD memory_b)
 DEFINE FIELD IF NOT EXISTS associations ON memories
@@ -379,6 +391,7 @@ DEFINE FUNCTION IF NOT EXISTS fn::synthesis_pressure_exceeded($threshold: float)
 -- only when phi exceeds threshold and no pending already set.
 -- =====================================================
 
+-- ASYNC: decouples from write transaction path. Does not block memory CREATE/UPDATE.
 DEFINE EVENT IF NOT EXISTS phi_watermark ON TABLE memories
   ASYNC RETRY 2
   WHEN $event = "CREATE" AND $after.tier = 'active' AND $after.deleted_at IS NONE
@@ -405,6 +418,7 @@ DEFINE EVENT IF NOT EXISTS phi_watermark ON TABLE memories
 -- stable → thread:  synthesis_count >= 5 OR resonance_phi >= 4.0
 -- =====================================================
 
+-- ASYNC: decouples from write transaction path. Does not block memory CREATE/UPDATE.
 DEFINE EVENT IF NOT EXISTS tier_promote ON TABLE memories
   ASYNC
   WHEN $event = "UPDATE"

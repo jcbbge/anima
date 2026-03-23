@@ -1,16 +1,16 @@
 # anima
 
-Persistent AI memory infrastructure with cross-session continuity and autonomous synthesis. Three processes: CLI (direct DB access), MCP HTTP server (agent tooling on port 3098), and synthesis worker (autonomous daemon that folds memories when significance thresholds trigger).
+Persistent AI memory infrastructure with cross-session continuity and autonomous synthesis. Three processes: CLI (direct DB access), MCP HTTP server (agent tooling on port 3098), and synthesis daemon (autonomous daemon that folds memories when significance thresholds trigger). Legacy `synthesis-worker` / `anima.synthesis` is deprecated and disabled.
 
 ## Stack
 
-Deno · TypeScript · SurrealDB (ws://127.0.0.1:8002/rpc, ns=anima db=memory) · OpenRouter (LLM synthesis) · Ollama (embeddings, nomic-embed-text)
+Deno · TypeScript · SurrealDB 3.0.4 (ws://127.0.0.1:8002/rpc, ns=anima db=memory) · surrealdb SDK 2.0.2 · OpenRouter (LLM synthesis) · Ollama (embeddings, nomic-embed-text)
 
 ## How to Run
 
 ```bash
 deno task mcp           # start MCP server — port 3098, launchd: com.jcbbge.anima-mcp.plist
-deno task worker        # start synthesis daemon — launchd: anima.synthesis.plist
+deno task worker        # start synthesis daemon — launchd: dev.anima.synthesis-daemon.plist (legacy anima.synthesis.plist disabled)
 deno task worker:once   # single synthesis check then exit
 deno task cli           # CLI — see subcommands below
 deno task schema        # apply schema to SurrealDB (run after schema changes)
@@ -44,14 +44,15 @@ anima daily             # health diagnostics
 
 ## Architecture
 
-`lib/` is the core — `memory.ts` owns all DB operations, `synthesize.ts` owns fold logic, `db.ts` owns the SurrealDB connection singleton. Both `cli/anima.ts` and `mcp-server/index.ts` import from `lib/` directly — no HTTP between them. The synthesis worker runs independently, importing only what it needs from `lib/`.
+`lib/` is the core — `memory.ts` owns all DB operations, `synthesize.ts` owns fold logic, `db.ts` owns the SurrealDB connection singleton. Both `cli/anima.ts` and `mcp-server/index.ts` import from `lib/` directly — no HTTP between them. The synthesis daemon runs independently, importing only what it needs from `lib/`.
 
 ## Mutable Surface
 
 - `lib/` — all business logic lives here; safe to extend
 - `mcp-server/index.ts` — add MCP tools here (TOOLS array)
 - `cli/anima.ts` — add CLI subcommands here (switch statement)
-- `synthesis-worker/index.ts` — add synthesis triggers here
+- `scripts/synthesis-daemon.ts` — active synthesis worker loop
+- `synthesis-worker/index.ts` — deprecated/disabled legacy worker (do not extend)
 - `schema/anima.surql` — schema definitions; run `deno task schema` after changes
 
 ## Frozen Surface

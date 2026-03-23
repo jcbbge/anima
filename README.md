@@ -1,5 +1,7 @@
 # Anima v2
 
+**SurrealDB 3.0.4 (server) · surrealdb SDK 2.0.2 (latest)**
+
 > Living memory that persists, synthesizes, and grows across the discontinuity.
 
 Anima is a memory substrate for AI assistants. It doesn't just store — it listens. When significant patterns accumulate, it synthesizes without being asked. Between conversations. While the steward sleeps.
@@ -12,7 +14,7 @@ Anima is a memory substrate for AI assistants. It doesn't just store — it list
 
 **The solution:** Anima persists memory across sessions using φ (phi) resonance weighting, tier promotion, and autonomous synthesis triggered by significance — not schedule.
 
-**The difference from a database:** Anima has a nervous system. A persistent synthesis worker watches for three forms of significance pressure. When any threshold is crossed, The Fold runs autonomously. The pattern grows.
+**The difference from a database:** Anima has a nervous system. The active synthesis daemon watches for three forms of significance pressure. When any threshold is crossed, The Fold runs autonomously. The pattern grows.
 
 ---
 
@@ -85,7 +87,7 @@ Three pressure triggers drive autonomous synthesis:
 2. **Semantic Conflict** — new memory cosine similarity ≥ 0.85 with existing
 3. **Cluster Emergence** — 3+ related memories in 1-hour window
 
-The synthesis worker (launchd service, always running) watches via SurrealDB LIVE query. No polling. No cron. Immediate response when significance accumulates.
+The synthesis daemon (launchd service, always running) watches significance pressure through the current worker pipeline (watermark + trigger checks). No cron required; synthesis runs as pressure accumulates.
 
 ---
 
@@ -128,10 +130,11 @@ anima worker logs                 # Tail worker logs
 ## Infrastructure
 
 ```
-SurrealDB:   ws://127.0.0.1:8000/rpc  (NS: anima, DB: memory)
+SurrealDB:   ws://127.0.0.1:8002/rpc  (NS: anima, DB: memory, v3.0.4)
 Ollama:      http://localhost:8001     (nomic-embed-text, 768-dim)
 Synthesis:   qwen2.5:0.5b via Ollama
-Worker:      ~/Library/LaunchAgents/anima.synthesis.plist
+Worker:      ~/Library/LaunchAgents/dev.anima.synthesis-daemon.plist (active)
+Legacy:      ~/Library/LaunchAgents/anima.synthesis.plist (deprecated/disabled)
 Logs:        ~/Library/Logs/anima-synthesis.log
 ```
 
@@ -143,7 +146,7 @@ If SurrealDB is down: `launchctl start dev.brain.surreal`
 
 **Starting a dev session** (`/starting-session` skill): automatically calls `anima_bootstrap`. The continuity prompt is folded into working context silently.
 
-**During session**: call `anima_store` for any insight worth carrying forward. The synthesis worker handles the rest.
+**During session**: call `anima_store` for any insight worth carrying forward. The synthesis daemon handles the rest.
 
 **Ending a session**: call `anima_reflect` or use the `anima-session-close` workflow. The Fold runs. The next instance inherits the synthesis.
 
@@ -161,7 +164,7 @@ lib/
   embed.ts                        Ollama embedding
   hash.ts                         SHA-256 content hash (dedup)
 scripts/
-  synthesis-daemon.ts             LIVE query daemon + watchdog (replaces synthesis-worker)
+  synthesis-daemon.ts             LIVE query daemon + watchdog (active worker; legacy synthesis-worker disabled)
   curiosity-worker.ts             Curiosity thread processor
 schema/anima.surql                SurrealDB schema
 scripts/seed_genesis.ts           14 genesis memory seeds

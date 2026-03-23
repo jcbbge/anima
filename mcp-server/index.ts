@@ -24,7 +24,7 @@ import {
   type MemoryOrigin,
 } from "../lib/memory.ts";
 import { reflectAndSynthesize } from "../lib/synthesize.ts";
-import { callSynthesisLLM } from "../lib/llm.ts";
+import { callSynthesisLLM, callLLMRaw } from "../lib/llm.ts";
 import { query } from "../lib/db.ts";
 
 // ============================================================================
@@ -372,19 +372,40 @@ async function generateReflectionFields(
   const userPromptBody = buildTrajectoryPrompt(sessionMemories, args);
   const fullPrompt = `${systemPrompt}\n\nSession bootstrap context:\n${promptText || "(none)"}\n\n${userPromptBody}`;
 
-  // Try OpenRouter/synthesis LLM first (trajectory deserves the synthesis-quality model)
+  // Try OpenRouter/synthesis LLM first using fold_config.fold_model when available
   let raw: string | null = null;
   try {
     const messages = [
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: `Session bootstrap context:\n${promptText || "(none)"}\n\n${userPromptBody}` },
     ];
-    const result = await callSynthesisLLM(messages, 20_000);
-    raw = result.content;
+
+    let foldModel: string | undefined;
+    try {
+      const rows = await query<{ value: string }>(
+        "SELECT `value` FROM fold_config WHERE key = 'fold_model' LIMIT 1",
+      );
+      if (rows[0]?.value) {
+        foldModel = rows[0].value;
+      }
+    } catch {
+      // DB read failed — fall through to synthesis profile call
+    }
+
+    if (foldModel) {
+      raw = await callLLMRaw(messages, {
+        config: { model: foldModel, temperature: 0.7, maxTokens: 400 },
+        timeoutMs: 20_000,
+      });
+    }
+
+    if (!raw) {
+      const result = await callSynthesisLLM(messages, 20_000);
+      raw = result.content;
+    }
   } catch {
     // Fall back to Ollama
   }
-
   // Ollama fallback
   if (!raw) {
     raw = await ollamaGenerate(fullPrompt);

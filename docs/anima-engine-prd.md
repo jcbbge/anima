@@ -140,7 +140,7 @@ ALTER TABLE fold_config CHANGEFEED 3d;
 ```
 
 **Edge case:** If changefeeds are already defined (re-running migration), `ALTER TABLE ... CHANGEFEED` is idempotent.
-**Failure:** If SurrealDB version < 2.0 (changefeeds require 2.0+). We're on 3.0-beta, this is not a concern.
+**Failure:** Requires SurrealDB 3.0.4+ (changefeeds supported). On supported deployments this is not a concern.
 
 ### 5.2 Versionstamp bootstrap
 
@@ -387,7 +387,7 @@ Example: when a fold completes and synthesis_count increments, a DEFINE EVENT fi
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Changefeed `SINCE @versionstamp` syntax not working as expected in SurrealDB 3.0-beta | Medium | High | Test in Phase 0 before writing any engine code. Fallback: use timestamp-based `SINCE d'...'` instead. |
+| Changefeed `SINCE @versionstamp` syntax not working as expected in SurrealDB 3.0.4 (stable) | Low | Medium | Validate in Phase 0 before writing engine code. Fallback: use timestamp-based `SINCE d'...'` if needed *(fixed in SurrealDB 3.0.4 — workaround can be removed in next refactor).* |
 | Engine misses synthesis trigger during Phase 1 parallel-run period | Low | Low | Old daemons still running; worst case is a duplicate fold (idempotent). |
 | Curiosity LLM calls spike API costs during active curiosity cycle | Low | Medium | Limit to 3 threads per cycle, add per-day cap if needed. |
 | Single mutex causes synthesis starvation if folds are slow | Low | Low | Folds take 3–6s (measured). 10s poll interval provides ample headroom. |

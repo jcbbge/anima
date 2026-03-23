@@ -31,8 +31,8 @@ export interface ModelProfile {
 
 export const PROFILES = {
   default: {
-    primary: "meta-llama/llama-3.3-70b-instruct",
-    fallback1: "meta-llama/llama-3.1-8b-instruct",
+    primary: "meta-llama/llama-3.1-8b-instruct",
+    fallback1: "meta-llama/llama-3.3-70b-instruct",
     fallback2: "mistralai/mistral-7b-instruct",
   },
   fast: {

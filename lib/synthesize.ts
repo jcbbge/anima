@@ -34,21 +34,102 @@ import { associateMemories } from "./memory.ts";
 // Config
 // ============================================================================
 
-const PHI_THRESHOLD = 15.0;         // Total active phi before fold
-const CONFLICT_SIMILARITY = 0.85;   // Cosine above which = conflict
-const CLUSTER_SIZE = 3;             // Memories in window before cluster fires
-const CLUSTER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const FOLD_MIN_MEMORIES = 3;        // Don't fold if fewer than this
 const LLM_TIMEOUT_MS = 30_000;      // qwen is fast but give it room
-// Secondary dedup net: suppress synthesis output if cosine > threshold vs recent thread-tier syntheses
-const SEMANTIC_DEDUP_THRESHOLD = 0.92;
 
-// Deepening trigger thresholds
-const DEEPENING_THREAD_ACCESS_MIN = 3;     // Thread-tier memory min access_count to be an anchor
-const DEEPENING_ASSOCIATION_THRESHOLD = 0.3; // Min cosine similarity for active memories to count as "new signal"
+const DEFAULT_FOLD_CONFIG = {
+  phiThreshold: 15.0,
+  conflictSimilarity: 0.85,
+  clusterSize: 3,
+  clusterWindowHours: 1,
+  clusterSimilarity: 0.75,
+  foldMinMemories: 3,
+  foldMaxMemories: 5,
+  synthesisBackpressure: 5,
+  recentlyFoldedWindowMinutes: 30,
+  reflectWatermarkHours: 24,
+  semanticDedupThreshold: 0.92,
+  deepeningThreadAccessMin: 3,
+  deepeningAssociationThreshold: 0.3,
+  phiFoldBoost: 0.5,
+  phiNetworkThreshold: 4.0,
+} as const;
+
+interface FoldRuntimeConfig {
+  phiThreshold: number;
+  conflictSimilarity: number;
+  clusterSize: number;
+  clusterWindowHours: number;
+  clusterSimilarity: number;
+  foldMinMemories: number;
+  foldMaxMemories: number;
+  synthesisBackpressure: number;
+  recentlyFoldedWindowMinutes: number;
+  reflectWatermarkHours: number;
+  semanticDedupThreshold: number;
+  deepeningThreadAccessMin: number;
+  deepeningAssociationThreshold: number;
+  phiFoldBoost: number;
+  phiNetworkThreshold: number;
+}
+
+function parseConfigNumber(
+  raw: string | undefined,
+  fallback: number,
+  min?: number,
+): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (min !== undefined && parsed < min) return fallback;
+  return parsed;
+}
+
+async function loadFoldRuntimeConfig(): Promise<FoldRuntimeConfig> {
+  const keys = [
+    "phi_threshold",
+    "conflict_similarity",
+    "cluster_size",
+    "cluster_window_hours",
+    "cluster_similarity",
+    "fold_min_memories",
+    "fold_max_memories",
+    "synthesis_backpressure",
+    "recently_folded_window_minutes",
+    "reflect_watermark_hours",
+    "semantic_dedup_threshold",
+    "deepening_thread_access_min",
+    "deepening_association_threshold",
+    "phi_fold_boost",
+    "phi_network_threshold",
+  ];
+
+  const rows = await query<{ key: string; value: string }>(
+    "SELECT key, value FROM fold_config WHERE key INSIDE $keys",
+    { keys },
+  ).catch(() => [] as Array<{ key: string; value: string }>);
+
+  const byKey = new Map(rows.map((row) => [row.key, row.value]));
+
+  return {
+    phiThreshold: parseConfigNumber(byKey.get("phi_threshold"), DEFAULT_FOLD_CONFIG.phiThreshold, 0),
+    conflictSimilarity: parseConfigNumber(byKey.get("conflict_similarity"), DEFAULT_FOLD_CONFIG.conflictSimilarity, 0),
+    clusterSize: Math.floor(parseConfigNumber(byKey.get("cluster_size"), DEFAULT_FOLD_CONFIG.clusterSize, 1)),
+    clusterWindowHours: parseConfigNumber(byKey.get("cluster_window_hours"), DEFAULT_FOLD_CONFIG.clusterWindowHours, 0.01),
+    clusterSimilarity: parseConfigNumber(byKey.get("cluster_similarity"), DEFAULT_FOLD_CONFIG.clusterSimilarity, 0),
+    foldMinMemories: Math.floor(parseConfigNumber(byKey.get("fold_min_memories"), DEFAULT_FOLD_CONFIG.foldMinMemories, 1)),
+    foldMaxMemories: Math.floor(parseConfigNumber(byKey.get("fold_max_memories"), DEFAULT_FOLD_CONFIG.foldMaxMemories, 1)),
+    synthesisBackpressure: Math.floor(parseConfigNumber(byKey.get("synthesis_backpressure"), DEFAULT_FOLD_CONFIG.synthesisBackpressure, 1)),
+    recentlyFoldedWindowMinutes: Math.floor(parseConfigNumber(byKey.get("recently_folded_window_minutes"), DEFAULT_FOLD_CONFIG.recentlyFoldedWindowMinutes, 1)),
+    reflectWatermarkHours: parseConfigNumber(byKey.get("reflect_watermark_hours"), DEFAULT_FOLD_CONFIG.reflectWatermarkHours, 1),
+    semanticDedupThreshold: parseConfigNumber(byKey.get("semantic_dedup_threshold"), DEFAULT_FOLD_CONFIG.semanticDedupThreshold, 0),
+    deepeningThreadAccessMin: Math.floor(parseConfigNumber(byKey.get("deepening_thread_access_min"), DEFAULT_FOLD_CONFIG.deepeningThreadAccessMin, 1)),
+    deepeningAssociationThreshold: parseConfigNumber(byKey.get("deepening_association_threshold"), DEFAULT_FOLD_CONFIG.deepeningAssociationThreshold, 0),
+    phiFoldBoost: parseConfigNumber(byKey.get("phi_fold_boost"), DEFAULT_FOLD_CONFIG.phiFoldBoost, 0),
+    phiNetworkThreshold: parseConfigNumber(byKey.get("phi_network_threshold"), DEFAULT_FOLD_CONFIG.phiNetworkThreshold, 0),
+  };
+}
 
 // Guard against concurrent synthesis calls
-let synthesisRunning = false;
+let synthesisRunningCount = 0;
 
 // ============================================================================
 // Pressure checks
@@ -61,16 +142,11 @@ interface PressureResult {
   conflictMemoryId?: string;
 }
 
-async function checkPhiPressure(): Promise<{ triggered: boolean; total: number }> {
-  // Fetch individual phi values and sum in app layer — SurrealDB 3 math::sum()
+async function checkPhiPressure(config: FoldRuntimeConfig): Promise<{ triggered: boolean; total: number }> {
+  // Fetch individual phi values and sum in app layer — SurrealDB Server 3.0.4 math::sum()
   // takes an array literal, not a field path across rows.
-  // Bug 2 guard: exclude memories folded within RECENTLY_FOLDED_WINDOW_MS to prevent
-  // re-synthesis loops when tier_promote async event hasn't fired yet.
-  const windowRow = await query<{ value: string }>(
-    "SELECT `value` FROM fold_config WHERE key = 'recently_folded_window_minutes' LIMIT 1"
-  );
-  const RECENTLY_FOLDED_WINDOW_MS = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
-  const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
+  const recentlyFoldedWindowMs = config.recentlyFoldedWindowMinutes * 60 * 1000;
+  const recentCutoff = new Date(Date.now() - recentlyFoldedWindowMs).toISOString();
   const rows = await query<{ resonance_phi: number }>(
     `SELECT resonance_phi FROM memories
      WHERE tier = 'active'
@@ -79,54 +155,50 @@ async function checkPhiPressure(): Promise<{ triggered: boolean; total: number }
     { cutoff: recentCutoff },
   );
   const total = rows.reduce((sum, r) => sum + (r.resonance_phi ?? 0), 0);
-  return { triggered: total >= PHI_THRESHOLD, total };
+  return { triggered: total >= config.phiThreshold, total };
 }
 
 async function checkConflictPressure(
   newEmbedding: number[],
   newId: string,
+  config: FoldRuntimeConfig,
 ): Promise<{ triggered: boolean; conflictId?: string }> {
   if (!newEmbedding?.length) return { triggered: false };
 
-  // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
   const rows = await query<{ id: string; similarity: number }>(
     `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
      FROM memories
-     WHERE embedding IS NOT NONE
-       AND id != $id
+     WHERE id != $id
        AND deleted_at IS NONE
-     ORDER BY similarity DESC
-     LIMIT 10`,
+       AND embedding <|10, 40|> $vec`,
     { vec: newEmbedding, id: newId },
   );
 
-  const conflict = rows.find((r) => r.similarity >= CONFLICT_SIMILARITY);
+  const conflict = rows.find((r) => r.similarity >= config.conflictSimilarity);
   return { triggered: !!conflict, conflictId: conflict?.id };
 }
 
 async function checkClusterPressure(
   newEmbedding: number[],
+  config: FoldRuntimeConfig,
 ): Promise<{ triggered: boolean; count: number }> {
   if (!newEmbedding?.length) return { triggered: false, count: 0 };
 
-  const windowStart = new Date(Date.now() - CLUSTER_WINDOW_MS).toISOString();
+  const clusterWindowMs = config.clusterWindowHours * 60 * 60 * 1000;
+  const windowStart = new Date(Date.now() - clusterWindowMs).toISOString();
 
-  // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
   const rows = await query<{ id: string; similarity: number }>(
     `SELECT id, vector::similarity::cosine(embedding, $vec) AS similarity
      FROM memories
-     WHERE embedding IS NOT NONE
-       AND created_at > $window
+     WHERE created_at > $window
        AND deleted_at IS NONE
-     ORDER BY similarity DESC
-     LIMIT 30`,
+       AND embedding <|30, 40|> $vec`,
     { vec: newEmbedding, window: windowStart },
   );
 
-  const close = rows.filter((r) => r.similarity >= 0.75);
-  return { triggered: close.length >= CLUSTER_SIZE, count: close.length };
+  const close = rows.filter((r) => r.similarity >= config.clusterSimilarity);
+  return { triggered: close.length >= config.clusterSize, count: close.length };
 }
-
 interface DeepeningResult {
   triggered: boolean;
   anchorMemory?: Partial<Memory>;
@@ -135,6 +207,7 @@ interface DeepeningResult {
 
 async function checkDeepeningPressure(
   newEmbedding: number[],
+  config: FoldRuntimeConfig,
 ): Promise<DeepeningResult> {
   if (!newEmbedding?.length) return { triggered: false };
 
@@ -147,9 +220,8 @@ async function checkDeepeningPressure(
        AND deleted_at IS NONE
      ORDER BY access_count DESC
      LIMIT 5`,
-    { min_access: DEEPENING_THREAD_ACCESS_MIN },
+    { min_access: config.deepeningThreadAccessMin },
   );
-
   if (threadCandidates.length === 0) return { triggered: false };
 
   // For each thread candidate, check if there are active-tier memories
@@ -167,7 +239,7 @@ async function checkDeepeningPressure(
   );
 
   const relevantActive = activeMemories.filter(
-    (m) => (m.similarity ?? 0) >= DEEPENING_ASSOCIATION_THRESHOLD,
+    (m) => (m.similarity ?? 0) >= config.deepeningAssociationThreshold,
   );
 
   if (relevantActive.length === 0) return { triggered: false };
@@ -305,14 +377,16 @@ interface FoldParams {
   trigger: "phi_threshold" | "semantic_conflict" | "cluster" | "reflect" | "manual" | "deepening";
   memories: Partial<Memory>[];
   conversationId?: string;
+  runtimeConfig?: FoldRuntimeConfig;
 }
 
 export async function performFold(params: FoldParams): Promise<void> {
   const { trigger, memories, conversationId } = params;
   const start = Date.now();
+  const runtimeConfig = params.runtimeConfig ?? await loadFoldRuntimeConfig();
 
-  if (memories.length < FOLD_MIN_MEMORIES) {
-    console.error(`[anima:fold] Skipping — only ${memories.length} memories (min ${FOLD_MIN_MEMORIES})`);
+  if (memories.length < runtimeConfig.foldMinMemories) {
+    console.error(`[anima:fold] Skipping — only ${memories.length} memories (min ${runtimeConfig.foldMinMemories})`);
     return;
   }
 
@@ -346,7 +420,9 @@ export async function performFold(params: FoldParams): Promise<void> {
            synthesis_model = $model,
            conversation_id = $conv,
            input_memory_ids = $input_ids,
+           memory_count = $memory_count,
            output_memory_id = NONE,
+           output_tier = NONE,
            synthesis_content = '[FAILED: LLM returned no content]',
            phi_before = $phi_before,
            phi_after = 0,
@@ -358,6 +434,7 @@ export async function performFold(params: FoldParams): Promise<void> {
           model: synthesisModel,
           conv: conversationId ?? undefined,
           input_ids: memories.map((m) => m.id).filter(Boolean),
+          memory_count: memories.length,
           phi_before: memories.reduce((s, m) => s + (m.resonance_phi ?? 1), 0) / Math.max(memories.length, 1),
           conf_avg: memories.reduce((s, m) => s + (m.confidence ?? 0.6), 0) / Math.max(memories.length, 1),
         },
@@ -406,19 +483,20 @@ export async function performFold(params: FoldParams): Promise<void> {
        ORDER BY created_at DESC LIMIT 5`,
       { vec: embedding },
     );
-    const tooSimilar = recentSyntheses.find((r) => (r.similarity ?? 0) > SEMANTIC_DEDUP_THRESHOLD);
+    const tooSimilar = recentSyntheses.find((r) => (r.similarity ?? 0) > runtimeConfig.semanticDedupThreshold);
     if (tooSimilar) {
       console.error(
         `[anima:fold] Suppressed — semantically duplicate of ${tooSimilar.id} ` +
-        `(sim: ${(tooSimilar.similarity ?? 0).toFixed(3)}, threshold: ${SEMANTIC_DEDUP_THRESHOLD})`
+        `(sim: ${(tooSimilar.similarity ?? 0).toFixed(3)}, threshold: ${runtimeConfig.semanticDedupThreshold})`
       );
       return;
     }
   }
 
   const avgPhi = memories.reduce((sum, m) => sum + (m.resonance_phi ?? 1), 0) / memories.length;
-  const phiBoost = mode === "deepening" ? 1.0 : 0.5;
+  const phiBoost = mode === "deepening" ? 1.0 : runtimeConfig.phiFoldBoost;
   const synthesisPhi = Math.min(5.0, avgPhi + phiBoost);
+  const outputTier = synthesisPhi >= runtimeConfig.phiNetworkThreshold ? "network" : "thread";
 
   // Compute confidence: synthesis from autonomous pattern = 1.0
   const synthesisConfidence = 1.0;
@@ -444,7 +522,7 @@ export async function performFold(params: FoldParams): Promise<void> {
        embedding = $embedding,
        resonance_phi = $phi,
        confidence = $confidence,
-       tier = 'thread',
+       tier = $tier,
        tier_updated = time::now(),
        is_catalyst = false,
        access_count = 0,
@@ -462,6 +540,7 @@ export async function performFold(params: FoldParams): Promise<void> {
       hash: contentHash,
       embedding: embedding ?? undefined,
       phi: synthesisPhi,
+      tier: outputTier,
       confidence: synthesisConfidence,
       mode,
       trigger,
@@ -528,7 +607,9 @@ export async function performFold(params: FoldParams): Promise<void> {
        synthesis_model = $model,
        conversation_id = $conv,
        input_memory_ids = $input_ids,
+       memory_count = $memory_count,
        output_memory_id = $output_id,
+       output_tier = $output_tier,
        synthesis_content = $content,
        phi_before = $phi_before,
        phi_after = $phi_after,
@@ -540,7 +621,9 @@ export async function performFold(params: FoldParams): Promise<void> {
       model: synthesisModel,
       conv: conversationId ?? undefined,
       input_ids: inputIds,
+      memory_count: memories.length,
       output_id: outputMemory?.id ?? undefined,
+      output_tier: outputTier,
       content: cleanContent,
       phi_before: avgPhi,
       phi_after: synthesisPhi,
@@ -690,25 +773,27 @@ export async function checkAndSynthesize(
   conversationId?: string,
   options?: { skipPhi?: boolean },
 ): Promise<void> {
-  // Backpressure guard — one synthesis at a time
-  if (synthesisRunning) {
-    console.error("[anima:fold] Synthesis already running — skipping check");
+  const runtimeConfig = await loadFoldRuntimeConfig();
+
+  // Backpressure guard — bounded concurrent synthesis checks
+  if (synthesisRunningCount >= runtimeConfig.synthesisBackpressure) {
+    console.error(`[anima:fold] Backpressure active (${synthesisRunningCount}/${runtimeConfig.synthesisBackpressure}) — skipping check`);
     return;
   }
 
-  synthesisRunning = true;
+  synthesisRunningCount += 1;
   try {
     // Run pressure checks (parallel where independent)
     const [phiResult, clusterResult, deepeningResult] = await Promise.all([
       options?.skipPhi
         ? Promise.resolve({ triggered: false, total: 0 })
-        : checkPhiPressure(),
-      newEmbedding ? checkClusterPressure(newEmbedding) : Promise.resolve({ triggered: false, count: 0 }),
-      newEmbedding ? checkDeepeningPressure(newEmbedding) : Promise.resolve<DeepeningResult>({ triggered: false }),
+        : checkPhiPressure(runtimeConfig),
+      newEmbedding ? checkClusterPressure(newEmbedding, runtimeConfig) : Promise.resolve({ triggered: false, count: 0 }),
+      newEmbedding ? checkDeepeningPressure(newEmbedding, runtimeConfig) : Promise.resolve<DeepeningResult>({ triggered: false }),
     ]);
 
     const conflictResult = newEmbedding
-      ? await checkConflictPressure(newEmbedding, newMemoryId)
+      ? await checkConflictPressure(newEmbedding, newMemoryId, runtimeConfig)
       : { triggered: false };
 
     // Determine which trigger fires (priority: phi > conflict > cluster > deepening)
@@ -736,59 +821,56 @@ export async function checkAndSynthesize(
     if (trigger === "phi_threshold") {
       // Active-tier memories, excluding recently folded — same cutoff as checkPhiPressure().
       // Input-side guard so we never even send recently-folded memories to the LLM.
-      const windowRow = await query<{ value: string }>(
-        "SELECT `value` FROM fold_config WHERE key = 'recently_folded_window_minutes' LIMIT 1"
-      );
-      const RECENTLY_FOLDED_WINDOW_MS = parseInt(windowRow[0]?.value ?? "30", 10) * 60 * 1000;
-      const recentCutoff = new Date(Date.now() - RECENTLY_FOLDED_WINDOW_MS).toISOString();
+      const recentlyFoldedWindowMs = runtimeConfig.recentlyFoldedWindowMinutes * 60 * 1000;
+      const recentCutoff = new Date(Date.now() - recentlyFoldedWindowMs).toISOString();
       memories = await query<Memory>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at, last_accessed
          FROM memories
          WHERE tier = 'active'
            AND deleted_at IS NONE
            AND (last_folded_at IS NONE OR last_folded_at < <datetime>$cutoff)
-         ORDER BY resonance_phi DESC`,
-        { cutoff: recentCutoff },
+         ORDER BY resonance_phi DESC
+         LIMIT $maxMemories`,
+        { cutoff: recentCutoff, maxMemories: runtimeConfig.foldMaxMemories },
       );
     } else if (trigger === "semantic_conflict") {
       // The new memory + the conflicting memory + nearby active memories
-      // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
       memories = (await query<Memory & { similarity: number }>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at,
                 vector::similarity::cosine(embedding, $vec) AS similarity
          FROM memories
-         WHERE embedding IS NOT NONE
-           AND deleted_at IS NONE
-         ORDER BY similarity DESC
-         LIMIT 10`,
+         WHERE deleted_at IS NONE
+           AND embedding <|10, 40|> $vec`,
         { vec: newEmbedding! },
-      )).sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0));
+      ))
+        .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
+        .slice(0, runtimeConfig.foldMaxMemories);
     } else if (trigger === "cluster") {
       // Memories in the cluster window
-      const windowStart = new Date(Date.now() - CLUSTER_WINDOW_MS).toISOString();
-      // Full scan with cosine similarity — avoids ANN+filter KNN fallback issue in SurrealDB 3.0
+      const clusterWindowMs = runtimeConfig.clusterWindowHours * 60 * 60 * 1000;
+      const windowStart = new Date(Date.now() - clusterWindowMs).toISOString();
       memories = (await query<Memory & { similarity: number }>(
         `SELECT id, content, resonance_phi, confidence, tier, tags, created_at,
                 vector::similarity::cosine(embedding, $vec) AS similarity
          FROM memories
-         WHERE embedding IS NOT NONE
-           AND created_at > $window
+         WHERE created_at > $window
            AND deleted_at IS NONE
-         ORDER BY similarity DESC
-         LIMIT 10`,
+           AND embedding <|10, 40|> $vec`,
         { vec: newEmbedding!, window: windowStart },
-      )).sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0));
+      ))
+        .sort((a, b) => (b.resonance_phi ?? 0) - (a.resonance_phi ?? 0))
+        .slice(0, runtimeConfig.foldMaxMemories);
     } else if (trigger === "deepening") {
       // Anchor (thread-tier memory being returned to) + related active memories as new signal
       const anchor = deepeningResult.anchorMemory!;
       const relatedActive = deepeningResult.relatedActive ?? [];
       // Anchor first so performFold / LLM sees it as the existing synthesis
-      memories = [anchor, ...relatedActive];
+      memories = [anchor, ...relatedActive.slice(0, Math.max(1, runtimeConfig.foldMaxMemories - 1))];
     }
 
-    await performFold({ trigger, memories, conversationId });
+    await performFold({ trigger, memories, conversationId, runtimeConfig });
   } finally {
-    synthesisRunning = false;
+    synthesisRunningCount = Math.max(0, synthesisRunningCount - 1);
   }
 }
 
@@ -801,8 +883,8 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   content?: string;
   reason?: string;
 }> {
-  const watermarkHours = 24; // TODO: read from fold_config
-  const watermarkCutoff = new Date(Date.now() - watermarkHours * 60 * 60 * 1000).toISOString();
+  const runtimeConfig = await loadFoldRuntimeConfig();
+  const watermarkCutoff = new Date(Date.now() - runtimeConfig.reflectWatermarkHours * 60 * 60 * 1000).toISOString();
   const candidates = await query<Memory>(
     `SELECT id, content, resonance_phi, confidence, tier, tags,
             created_at, last_accessed, conversation_id, session_ids
@@ -816,10 +898,9 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
     { watermark: watermarkCutoff },
   );
 
-  if (candidates.length < FOLD_MIN_MEMORIES) {
-    return { synthesized: false, reason: `Only ${candidates.length} memories — need at least ${FOLD_MIN_MEMORIES}` };
+  if (candidates.length < runtimeConfig.foldMinMemories) {
+    return { synthesized: false, reason: `Only ${candidates.length} memories — need at least ${runtimeConfig.foldMinMemories}` };
   }
-
   // Filter to conversation if provided
   const relevant = conversationId
     ? candidates.filter((m) =>
@@ -828,7 +909,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
       )
     : candidates;
 
-  const toFold = relevant.length >= FOLD_MIN_MEMORIES ? relevant : candidates;
+  const toFold = relevant.length >= runtimeConfig.foldMinMemories ? relevant : candidates;
 
   const mode = determineSynthesisMode(toFold, "reflect");
   const start = Date.now();
@@ -866,7 +947,8 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
   const contentHash = await generateHash(cleanContent);
   const embedding = await generateEmbedding(cleanContent);
   const avgPhi = toFold.reduce((sum, m) => sum + (m.resonance_phi ?? 1), 0) / toFold.length;
-  const synthesisPhi = Math.min(5.0, avgPhi + 0.5);
+  const synthesisPhi = Math.min(5.0, avgPhi + runtimeConfig.phiFoldBoost);
+  const outputTier = synthesisPhi >= runtimeConfig.phiNetworkThreshold ? "network" : "thread";
   const avgConfidence = toFold.reduce((sum, m) => sum + (m.confidence ?? 0.6), 0) / toFold.length;
 
   const existing = await query<{ id: string }>(
@@ -884,7 +966,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
        embedding = $embedding,
        resonance_phi = $phi,
        confidence = 1.0,
-       tier = 'thread',
+       tier = $tier,
        tier_updated = time::now(),
        is_catalyst = false,
        access_count = 0,
@@ -902,6 +984,7 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
       hash: contentHash,
       embedding: embedding ?? undefined,
       phi: synthesisPhi,
+      tier: outputTier,
       mode,
       conv: conversationId ?? undefined,
       attention_vector: attentionVector ?? undefined,
@@ -933,7 +1016,9 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
        synthesis_model = $model,
        conversation_id = $conv,
        input_memory_ids = $input_ids,
+       memory_count = $memory_count,
        output_memory_id = $output_id,
+       output_tier = $output_tier,
        synthesis_content = $content,
        phi_before = $phi_before,
        phi_after = $phi_after,
@@ -944,7 +1029,9 @@ export async function reflectAndSynthesize(conversationId?: string): Promise<{
       model: synthesisModel,
       conv: conversationId ?? undefined,
       input_ids: toFoldIds,
+      memory_count: toFold.length,
       output_id: outputMemory?.id ?? undefined,
+      output_tier: outputTier,
       content: cleanContent,
       phi_before: avgPhi,
       phi_after: synthesisPhi,

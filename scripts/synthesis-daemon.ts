@@ -22,7 +22,8 @@
 await loadEnv();
 
 import { getDb, closeDb, query } from "../lib/db.ts";
-import { performFold } from "../lib/synthesize.ts";
+import { generateEmbedding } from "../lib/embed.ts";
+import { checkAndSynthesize, performFold } from "../lib/synthesize.ts";
 import type { Memory } from "../lib/memory.ts";
 import { Table } from "surrealdb";
 
@@ -86,14 +87,56 @@ function startWatchdog(): void {
 // Mutex guard — one fold at a time
 // ============================================================================
 
-// Module-level flag. If a fold is already running when a new trigger arrives,
+// Shared module-level lock. If a fold is already running when a new trigger arrives,
 // skip it. The watermark stays pending — the next LIVE notification handles it.
-let synthesisRunning = false;
+// Kept as an object so handlers can receive explicit shared state by reference.
+interface SynthesisLock {
+  running: boolean;
+}
+
+const synthesisLock: SynthesisLock = { running: false };
+interface MemoryLiveRecord {
+  id: string;
+  content: string;
+  resonance_phi: number;
+  confidence: number;
+  tier: string;
+  tags: string[];
+  embedding?: number[];
+  conversation_id?: string;
+  created_at: string;
+}
+
+// Track which memories we've recently seen to avoid double-triggering
+// Maps memory record ID string → timestamp seen
+const recentlySeen = new Map<string, number>();
+const SEEN_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function markSeen(id: string): void {
+  recentlySeen.set(id, Date.now());
+
+  // Opportunistic TTL cleanup to bound map size over long daemon uptime
+  const now = Date.now();
+  for (const [seenId, seenAt] of recentlySeen.entries()) {
+    if (now - seenAt > SEEN_TTL_MS) {
+      recentlySeen.delete(seenId);
+    }
+  }
+}
+
+function isSeen(id: string): boolean {
+  const t = recentlySeen.get(id);
+  if (!t) return false;
+  if (Date.now() - t > SEEN_TTL_MS) {
+    recentlySeen.delete(id);
+    return false;
+  }
+  return true;
+}
 
 // ============================================================================
 // Set the pending_synthesis watermark value
 // ============================================================================
-
 async function setWatermark(value: string): Promise<void> {
   await query(
     `UPDATE fold_config SET value = $value, updated_at = time::now()
@@ -106,15 +149,14 @@ async function setWatermark(value: string): Promise<void> {
 // Core fold dispatch — claim work, run synthesis, reset watermark
 // ============================================================================
 
-async function dispatchFold(): Promise<void> {
-  if (synthesisRunning) {
+async function dispatchFold(lock: SynthesisLock = synthesisLock): Promise<void> {
+  if (lock.running) {
     log("Synthesis already running — skipping trigger (watermark remains pending)");
     return;
   }
 
-  synthesisRunning = true;
+  lock.running = true;
   log("Claiming work — setting watermark to 'running'");
-
   await setWatermark("running");
 
   try {
@@ -159,7 +201,7 @@ async function dispatchFold(): Promise<void> {
       log("Watermark reset to 'idle' after error backoff");
     }, 30_000);
   } finally {
-    synthesisRunning = false;
+    lock.running = false;
     try {
       await setWatermark("idle");
       log("Watermark reset to 'idle'");
@@ -168,7 +210,6 @@ async function dispatchFold(): Promise<void> {
     }
   }
 }
-
 // ============================================================================
 // Startup check — handle pre-existing pending watermark
 // ============================================================================
@@ -246,9 +287,74 @@ async function startLiveListener(): Promise<void> {
 }
 
 // ============================================================================
-// Resilience — unhandled errors must not kill the daemon
+// memories LIVE watcher (semantic conflict + cluster triggers)
 // ============================================================================
 
+async function handleNewMemory(
+  record: MemoryLiveRecord,
+  lock: SynthesisLock = synthesisLock,
+): Promise<void> {
+  const { id, tier, embedding, conversation_id } = record;
+  // Only process active-tier memories
+  if (tier !== "active") return;
+
+  const idStr = String(id);
+
+  // Skip if we already triggered on this memory
+  if (isSeen(idStr)) return;
+  markSeen(idStr);
+
+  // Shared mutex with watermark path to avoid overlapping folds
+  if (lock.running) {
+    log(`Synthesis already running — skipping memory trigger (${idStr})`);
+    return;
+  }
+  // If memory has no embedding in the record, fetch it
+  let embeddingVec = embedding && embedding.length > 0 ? embedding : null;
+  if (!embeddingVec && record.content) {
+    log(`Fetching embedding for memory trigger (${idStr})...`);
+    embeddingVec = await generateEmbedding(record.content);
+  }
+
+  lock.running = true;
+  try {
+    await checkAndSynthesize(idStr, embeddingVec, conversation_id, { skipPhi: true });
+  } finally {
+    lock.running = false;
+  }
+}
+
+async function startMemoryLiveListener(): Promise<void> {
+  const db = await getDb();
+  log("Registering LIVE query on memories table...");
+
+  // SDK 2.x: db.live(table) returns a Promise<AsyncIterable>
+  const subscription = db.live<MemoryLiveRecord>(new Table("memories"));
+
+  log("LIVE query active — listening for new memories...");
+
+  for await (const message of await subscription) {
+    if (message.action === "KILLED") {
+      log("Memory LIVE query killed — outer retry loop will reconnect");
+      return;
+    }
+
+    if (message.action !== "CREATE") continue;
+
+    const record = message.value as unknown as MemoryLiveRecord;
+    if (!record) continue;
+    if (record.tier !== "active") continue;
+
+    // Handle in background — don't block the LIVE loop
+    handleNewMemory(record).catch((err) =>
+      log(`Error handling new memory: ${(err as Error).message}`)
+    );
+  }
+}
+
+// ============================================================================
+// Resilience — unhandled errors must not kill the daemon
+// ============================================================================
 self.addEventListener("error", (e) => {
   log(`Uncaught error (survived): ${e.message}`);
   e.preventDefault();
@@ -290,21 +396,47 @@ await checkStartupWatermark();
 // Watchdog catches any pending watermarks the LIVE query missed
 startWatchdog();
 
-// Persistent LIVE loop with exponential backoff on failure
+// Persistent LIVE loops with independent exponential backoff on failure
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 60_000;
-let retries = 0;
 
-while (true) {
-  try {
-    await startLiveListener();
-    // startLiveListener returns normally only if the LIVE query was KILLED
-    log("LIVE listener returned — restarting...");
-    retries = 0;
-  } catch (err) {
-    const wait = Math.min(RETRY_BASE_MS * Math.pow(2, retries), RETRY_MAX_MS);
-    log(`LIVE listener error: ${(err as Error).message} — retrying in ${wait / 1000}s`);
-    retries++;
-    await new Promise((r) => setTimeout(r, wait));
+async function runFoldConfigListenerLoop(): Promise<void> {
+  let retries = 0;
+
+  while (true) {
+    try {
+      await startLiveListener();
+      // startLiveListener returns normally only if the LIVE query was KILLED
+      log("fold_config LIVE listener returned — restarting...");
+      retries = 0;
+    } catch (err) {
+      const wait = Math.min(RETRY_BASE_MS * Math.pow(2, retries), RETRY_MAX_MS);
+      log(`fold_config LIVE listener error: ${(err as Error).message} — retrying in ${wait / 1000}s`);
+      retries++;
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }
+
+async function runMemoryListenerLoop(): Promise<void> {
+  let retries = 0;
+
+  while (true) {
+    try {
+      await startMemoryLiveListener();
+      // startMemoryLiveListener returns normally only if the LIVE query was KILLED
+      log("memories LIVE listener returned — restarting...");
+      retries = 0;
+    } catch (err) {
+      const wait = Math.min(RETRY_BASE_MS * Math.pow(2, retries), RETRY_MAX_MS);
+      log(`memories LIVE listener error: ${(err as Error).message} — retrying in ${wait / 1000}s`);
+      retries++;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
+await Promise.all([
+  runFoldConfigListenerLoop(),
+  runMemoryListenerLoop(),
+]);

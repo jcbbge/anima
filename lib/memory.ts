@@ -242,8 +242,8 @@ export async function addMemory(params: AddMemoryParams): Promise<AddMemoryResul
 // ============================================================================
 
 async function linkMemoryToTensions(memoryId: string, embedding: number[]): Promise<void> {
-  // Fetch all held tensions with embeddings, compute similarity in code
-  // (SurrealDB 3.0 doesn't support ORDER BY on computed vector similarity columns)
+  // Fetch all held tensions with embeddings, compute similarity in code.
+  // SurrealDB 3.0.4 fixed HNSW+filter behavior; TODO: re-evaluate moving similarity ORDER BY into indexed ANN query path.
   const tensions = await query<{ id: string; resonance_phi: number; sim: number }>(
     `SELECT id, resonance_phi,
        vector::similarity::cosine(context_embedding, $vec) AS sim
@@ -798,8 +798,7 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
 
     // ----------------------------------------------------------------
     // Step 3: 1-hop traversal from top-5 catalysts via memory_associations
-    // Uses the association indexes (idx_assoc_a_resonance, idx_assoc_b_resonance).
-    // This is what the original traversalBootstrap never actually did.
+    // Uses remembers relation edges.
     // ----------------------------------------------------------------
     const alreadyLoaded = new Set(
       [...networkMemories, ...stableMemories, ...recentMemories, ...catalystMemories]
@@ -810,20 +809,19 @@ export async function traversalBootstrap(): Promise<BootstrapResult> {
 
     let traversalNeighbors: Memory[] = [];
     if (catalystIds.length > 0) {
-      const assocRows = await query<{ memory_a: string; memory_b: string; strength: number }>(
-        `SELECT memory_a, memory_b, strength
-         FROM memory_associations
-         WHERE (memory_a INSIDE $ids OR memory_b INSIDE $ids)
+      const assocRows = await query<{ in: string; out: string; strength: number }>(
+        `SELECT in, out, strength
+         FROM remembers
+         WHERE in INSIDE $ids OR out INSIDE $ids
          ORDER BY strength DESC
          LIMIT 30`,
         { ids: catalystIds },
       );
 
       const neighborIds = assocRows
-        .flatMap((r) => [r.memory_a, r.memory_b])
+        .flatMap((r) => [r.in, r.out])
         .filter((id) => id && !alreadyLoaded.has(id) && !catalystIds.includes(id))
         .slice(0, 10);
-
       if (neighborIds.length > 0) {
         traversalNeighbors = await query<Memory>(
           `SELECT id, content, resonance_phi, tier, tags
@@ -1139,7 +1137,7 @@ export async function getStats(): Promise<AnimaStats> {
 export async function associateMemories(memoryIds: string[], sessionContext?: string): Promise<void> {
   if (memoryIds.length < 2) return;
 
-  // Build all unique pairs in canonical order so (a,b) and (b,a) are the same edge
+  // Build all unique pairs in canonical order so (a,b) and (b,a) are the same edge.
   const pairs: Array<[string, string]> = [];
   for (let i = 0; i < memoryIds.length; i++) {
     for (let j = i + 1; j < memoryIds.length; j++) {
@@ -1150,25 +1148,25 @@ export async function associateMemories(memoryIds: string[], sessionContext?: st
     }
   }
 
-  // Build one UPSERT per pair, batched inside a single transaction.
-  // UPSERT creates the row if absent, or updates it if present —
-  // eliminating the separate SELECT + CREATE/UPDATE round-trips.
-  // All pairs are committed atomically; any failure rolls back the whole set.
+  // Write to relation edges with UPSERT semantics on remembers(in,out) unique index.
+  // Keep update logic in the database statement so callers remain fire-and-forget.
   try {
     const vars: Record<string, unknown> = {};
     const stmts = pairs.map(([a, b], idx) => {
       vars[`a${idx}`] = a;
       vars[`b${idx}`] = b;
+      vars[`strength${idx}`] = 1.0;
+      vars[`count${idx}`] = 1;
       vars[`ctx${idx}`] = sessionContext ?? "";
-      return `UPSERT memory_associations
-        SET memory_a          = $a${idx},
-            memory_b          = $b${idx},
-            co_occurrence_count = IF co_occurrence_count IS NONE THEN 1 ELSE co_occurrence_count + 1 END,
-            strength          = IF strength IS NONE THEN 1.0 ELSE math::min(5.0, strength + 0.1) END,
-            session_contexts  = IF session_contexts IS NONE THEN [$ctx${idx}] ELSE array::append(session_contexts, $ctx${idx}) END,
-            created_at        = IF created_at IS NONE THEN time::now() ELSE created_at END,
-            updated_at        = time::now()
-        WHERE memory_a = $a${idx} AND memory_b = $b${idx};`;
+      return `UPSERT $a${idx}->remembers->$b${idx}
+        SET strength = $strength${idx},
+            co_occurrence = $count${idx},
+            updated_at = time::now(),
+            created_at = IF created_at IS NONE THEN time::now() ELSE created_at END
+        ON DUPLICATE KEY UPDATE
+          strength = (strength + $strength${idx}) / 2,
+          co_occurrence = co_occurrence + $count${idx},
+          updated_at = time::now();`;
     });
 
     const sql = `BEGIN TRANSACTION;\n${stmts.join("\n")}\nCOMMIT TRANSACTION;`;
@@ -1178,7 +1176,6 @@ export async function associateMemories(memoryIds: string[], sessionContext?: st
     // Association tracking is best-effort — never block the caller
   }
 }
-
 // ============================================================================
 // getCatalysts — surface all catalyst memories ranked by phi
 // ============================================================================

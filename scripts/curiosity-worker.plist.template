@@ -35,6 +35,8 @@
         <string>root</string>
         <key>SURREAL_PASS</key>
         <string>root</string>
+        <key>PATH</key>
+        <string>/Users/jcbbge/.opencode/bin:/Users/jcbbge/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- External API keys (OpenRouter, etc.) must NOT be placed here.
              The daemon loads them from .env at runtime via the loadEnv() function.
              See: lib/db.ts and the loadEnv() function in scripts/curiosity-worker.ts -->
