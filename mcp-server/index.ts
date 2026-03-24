@@ -541,8 +541,9 @@ async function handleAnimaStats(_args: Args): Promise<unknown> {
   return await getStats();
 }
 
-async function handleAnimaSessionClose(args: Args): Promise<unknown> {
-  const convId = typeof args.conversation_id === "string" ? args.conversation_id : null;
+TS:async function handleAnimaSessionClose(args: Args): Promise<unknown> {
+JQ:  const convId = typeof args.conversation_id === "string" ? args.conversation_id : crypto.randomUUID();
+ 
 
   // Fetch session memories before trajectory generation (anchors narrative in what was actually stored)
   const sessionMemories = convId
@@ -595,17 +596,17 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
        phi_sum               = $phi_sum,
        emergence_moment      = $emergence_moment,
        reflected_at          = time::now()`,
-    {
-      conv: convId ?? "",
+      conv: convId,
+ 
       context_quality:       fields.context_quality,
       continuity_score:      fields.continuity_score,
       had_emergence_moment:  fields.had_emergence_moment,
       needed_correction:     fields.needed_correction,
-      surprises:             fields.surprises === null ? undefined : fields.surprises,
-      friction_notes:        fields.friction_notes === null ? undefined : fields.friction_notes,
-      general_notes:         fields.general_notes === null ? undefined : fields.general_notes,
+      surprises:             fields.surprises ?? null,
+      friction_notes:        fields.friction_notes ?? null,
+      general_notes:         fields.general_notes ?? null,
       phi_sum:               fields.phi_sum,
-      emergence_moment:      fields.emergence_moment === null ? undefined : fields.emergence_moment,
+      emergence_moment:      fields.emergence_moment ?? null,
     },
   );
 
@@ -628,7 +629,8 @@ async function handleAnimaSessionClose(args: Args): Promise<unknown> {
          next_pull_emb      = $next_pull_emb,
          created_at         = time::now()`,
       {
-        conv: convId ?? "",
+        conv: convId,
+ 
         trajectory:      fields.trajectory,
         warmth:          fields.warmth,
         next_pull:       fields.next_pull === null ? undefined : fields.next_pull,
@@ -811,7 +813,16 @@ Deno.serve({ port: PORT, hostname: "127.0.0.1" }, async (req) => {
     );
   }
 
-  const response = await dispatch(body);
+  let response: unknown;
+  try {
+    response = await dispatch(body);
+  } catch (err) {
+    console.error(`[anima:mcp:http] Unhandled dispatch error: ${(err as Error).message}`);
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", id: body.id ?? null, error: { code: -32603, message: "Internal error" } }),
+      { status: 500, headers: { "content-type": "application/json" } },
+    );
+  }
 
   if (response === null) {
     return new Response(null, { status: 204 });
@@ -820,4 +831,16 @@ Deno.serve({ port: PORT, hostname: "127.0.0.1" }, async (req) => {
   return new Response(JSON.stringify(response), {
     headers: { "content-type": "application/json" },
   });
+});
+
+// Global error handlers to prevent crashes
+Deno.addEventListener("error", (event) => {
+  console.error(`[anima:mcp:http] Uncaught error: ${event.error?.message ?? String(event.error)}`);
+  event.preventDefault();
+});
+
+// Handle unhandled promise rejections
+globalThis.addEventListener("unhandledrejection", (event) => {
+  console.error(`[anima:mcp:http] Unhandled rejection: ${event.reason?.message ?? String(event.reason)}`);
+  event.preventDefault();
 });
