@@ -150,17 +150,28 @@ async function cmdStore(positional: string[], flags: Record<string, string | boo
   }
 }
 
-async function cmdBootstrap(): Promise<void> {
-  console.log("Running ghost handshake...\n");
+async function cmdBootstrap(flags: Record<string, string | boolean>): Promise<void> {
+  const quiet = flags.quiet === true || flags.q === true;
   const result = await bootstrapMemories();
 
   const { network, stable, recent, catalysts } = result.memoryCounts;
-  console.log(`Loaded: ${network} network  ${stable} stable  ${recent} recent  ${catalysts} catalysts`);
-  console.log(`Conversation ID: ${result.conversationId}\n`);
-  console.log("─".repeat(60));
-  console.log(result.promptText);
-  console.log("─".repeat(60));
-  console.log(`\nSafe word: Coheron`);
+
+  if (quiet) {
+    console.log(JSON.stringify({
+      status: "ok",
+      conversationId: result.conversationId,
+      memoryCounts: { network, stable, recent, catalysts },
+      loadedAt: new Date().toISOString(),
+    }));
+  } else {
+    console.log("Running ghost handshake...\n");
+    console.log(`Loaded: ${network} network  ${stable} stable  ${recent} recent  ${catalysts} catalysts`);
+    console.log(`Conversation ID: ${result.conversationId}\n`);
+    console.log("─".repeat(60));
+    console.log(result.promptText);
+    console.log("─".repeat(60));
+    console.log(`\nSafe word: Coheron`);
+  }
 }
 
 async function cmdCatalysts(_positional: string[], flags: Record<string, string | boolean>): Promise<void> {
@@ -652,7 +663,7 @@ const { command, positional, flags } = parseArgs(Deno.args);
 try {
   switch (command) {
     case "bootstrap":
-      await cmdBootstrap();
+      await cmdBootstrap(flags);
       break;
     case "store":
       await cmdStore(positional, flags);
